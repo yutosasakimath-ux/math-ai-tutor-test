@@ -58,14 +58,12 @@ with st.sidebar:
         st.write("👇 **答え合わせ**")
         col1, col2 = st.columns(2)
         
-        # 1-2. 解答だけ見るボタン
         with col1:
             if st.button("解答のみ確認"):
                 prompt_text = "直前の類題の【解答（数値・数式）のみ】を教えてください。解説は不要です。"
                 st.session_state.messages.append({"role": "user", "content": prompt_text})
                 st.rerun()
         
-        # 1-3. 解説も見るボタン
         with col2:
             if st.button("解説を含めて確認"):
                 prompt_text = "直前の類題の【詳しい解説と解答】を教えてください。"
@@ -79,20 +77,16 @@ with st.sidebar:
 
     # --- ■ 2. 解答確認モードの機能 ---
     elif mode == "⚡ 解答確認モード":
-        # ★ご要望の案内文言
         st.warning("📸 解答が知りたい問題を入力（または画像をアップ）してください。即座に答えを提示します。")
     
     # --- ■ 3. 演習モードの機能 ---
     elif mode == "⚔️ 演習モード":
         st.success("📝 指定した単元の問題を出題し、採点します。")
         
-        # ★ご要望のスタイル選択機能
         feedback_style = st.radio(
             "採点・解説のスタイル",
             ["解答のみ（シンプル）", "解説付き（詳細）"]
         )
-        
-        # 選択結果をセッション状態に保存して、プロンプトに反映させる
         st.session_state['feedback_style'] = feedback_style
 
         topic = st.text_input("演習したい単元（例：二次関数、確率）")
@@ -106,7 +100,6 @@ with st.sidebar:
     # 共通：リセットボタン
     if st.button("🗑️ 会話をリセット", type="primary"):
         st.session_state.messages = []
-        # 設定値もリセットしたければここで初期化
         st.rerun()
 
 # --- 4. モードごとのプロンプト定義 ---
@@ -130,20 +123,21 @@ elif mode == "⚡ 解答確認モード":
     - 途中式は示しても良いですが、まずは「答えは〜です」と明記してください。
     """
 elif mode == "⚔️ 演習モード":
-    # 選択されたスタイルに応じて採点の指示を変える
+    # スタイルに応じた採点指示
     style_instruction = ""
     current_style = st.session_state.get('feedback_style', "解説付き（詳細）")
     
     if current_style == "解答のみ（シンプル）":
-        style_instruction = "採点時は、合否判定と正答（数値・数式）のみを簡潔に伝えてください。長い解説は不要です。"
+        style_instruction = "採点時は、正誤判定（合格/不合格）と正答のみを簡潔に伝えてください。"
     else:
-        style_instruction = "採点時は、どこが良かったか、どこで間違えたかを詳しく解説してください。"
+        style_instruction = "採点時は、正誤判定に加え、どこが良かったか、どこで間違えたかを詳しく解説してください。"
 
     system_instruction = base_instruction + f"""
     【役割：試験監督・コーチ】
     - 生徒の要望に合わせて問題を出題してください。
-    - 問題を出した後は、**生徒の解答を待ってください**。
-    - 生徒が回答したら、採点を行ってください。
+    - 問題を出した後は、生徒の回答を待ってください。
+    - 生徒から数値や数式が送られてきた場合、それを**「直前の問題に対する解答」**とみなして採点してください。
+    - 多少の表記ゆれ（例: x=2 と 2）は許容し、数学的に合っていれば「合格」としてください。
     - {style_instruction}
     """
 
@@ -185,15 +179,22 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア ---
+# --- 8. 入力エリア（採点精度向上のための修正） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
-    # 解答確認モードの時だけ、プレースホルダー（薄い文字）を変えて案内を強化
     placeholder_text = "質問を入力..."
     if mode == "⚡ 解答確認モード":
-        placeholder_text = "解答を知りたい問題を入力（画像も可）"
+        placeholder_text = "解答を知りたい問題を入力"
     elif mode == "⚔️ 演習モード":
-        placeholder_text = "解答を入力..."
+        placeholder_text = "解答を入力（例：x = 2）"
 
     if prompt := st.chat_input(placeholder_text):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        # ★ここが重要！演習モードの時だけ、裏側で「これは解答です」と注釈をつけて保存する
+        content_to_save = prompt
+        
+        if mode == "⚔️ 演習モード":
+            # ユーザーには入力した数字だけ見えるが、AIには「解答」だと伝える
+            content_to_save = f"【生徒の解答】\n{prompt}\n\n※この解答を採点してください。"
+        
+        # チャット履歴に追加（AIには注釈付きが渡る）
+        st.session_state.messages.append({"role": "user", "content": content_to_save})
         st.rerun()
