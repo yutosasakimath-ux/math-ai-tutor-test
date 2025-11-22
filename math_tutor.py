@@ -5,7 +5,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。問題数を指定して演習しよう！")
+st.caption("Gemini 2.5 Flash 搭載。問題数を指定して演習しよう！※モード切替時には「会話をリセット」を押してください")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -233,3 +233,4 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
         
         st.session_state.messages.append({"role": "user", "content": content_to_save})
         st.rerun()
+
