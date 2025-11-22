@@ -5,7 +5,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。問題数を指定して演習しよう！※モード切替時には「会話をリセット」を押してください")
+st.caption("Gemini 2.5 Flash 搭載。難易度を自在に操ろう！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -38,22 +38,46 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # --- ■ 1. 学習モード ---
+    # --- ■ 1. 学習モード（ここを修正しました！） ---
     if mode == "📖 学習モード":
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        # 学習モード用の問題数指定
         num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
-        if st.button("類題を出題（問題のみ）"):
-            prompt_text = f"""
-            【教師へのリクエスト】
-            直前のやり取りで扱った問題と「同じ単元」「同じ難易度」の類題を【{num_questions_learn}問】作成してください。
-            まだ答えや解説は一切書かず、**問題文のみ**を提示してください。
-            """
-            st.session_state.messages.append({"role": "user", "content": prompt_text})
-            st.rerun()
+        # ★難易度調整ボタンを追加
+        st.caption("難易度を選んで出題")
+        l_col1, l_col2, l_col3 = st.columns(3)
+        
+        with l_col1:
+            if st.button("↘️ 易しく", key="learn_easy"):
+                prompt_text = f"""
+                【教師へのリクエスト】
+                直前の内容よりも**難易度を下げて（基礎的な内容にして）**、新しい類題を【{num_questions_learn}問】作成してください。
+                まだ答えや解説は一切書かず、**問題文のみ**を提示してください。
+                """
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
+        
+        with l_col2:
+            if st.button("➡️ 維持", key="learn_same"):
+                prompt_text = f"""
+                【教師へのリクエスト】
+                直前の内容と**同じ難易度**の新しい類題を【{num_questions_learn}問】作成してください。
+                まだ答えや解説は一切書かず、**問題文のみ**を提示してください。
+                """
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
+
+        with l_col3:
+            if st.button("↗️ 難しく", key="learn_hard"):
+                prompt_text = f"""
+                【教師へのリクエスト】
+                直前の内容よりも**難易度を上げて（応用的な内容にして）**、新しい類題を【{num_questions_learn}問】作成してください。
+                まだ答えや解説は一切書かず、**問題文のみ**を提示してください。
+                """
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
 
         st.write("👇 **答え合わせ**")
         col1, col2 = st.columns(2)
@@ -75,35 +99,30 @@ with st.sidebar:
     elif mode == "⚡ 解答確認モード":
         st.warning("📸 解答が知りたい問題を入力（または画像をアップ）してください。即座に答えを提示します。")
     
-    # --- ■ 3. 演習モード（問題数指定に対応！） ---
+    # --- ■ 3. 演習モード ---
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
-        
-        # ★ここに追加：演習モード共通の問題数設定
-        st.write("### 🔢 設定")
-        num_questions_exam = st.number_input("出題する問題数", min_value=1, max_value=5, value=1, key="num_exam")
         
         st.write("### 🆕 演習スタート")
         topic = st.text_input("演習したい単元（例：二次関数）")
         
         if st.button("問題を作成開始"):
-            # 指定された問題数でリクエスト
-            prompt_text = f"【{topic}】に関する練習問題を【{num_questions_exam}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
+            prompt_text = f"【{topic}】に関する練習問題を**1問**出題してください。まだ答えは言わないでください。"
             st.session_state.messages.append({"role": "user", "content": prompt_text})
             st.rerun()
         
         st.markdown("---")
         
-        # 難易度調整ボタン（ここにも問題数が反映されます）
+        # 難易度調整ボタン
         st.write("### ⏩ 次の問題へ")
         
         col_easy, col_same, col_hard = st.columns(3)
         
         with col_easy:
-            if st.button("↘️ 易しく"):
-                prompt_text = f"""
+            if st.button("↘️ 易しく", key="exam_easy"):
+                prompt_text = """
                 【教師へのリクエスト】
-                先ほどの問題よりも**難易度を下げて（基礎的な内容にして）**、新しい類題を【{num_questions_exam}問】作成してください。
+                先ほどの問題よりも**難易度を下げて（基礎的な内容にして）**、新しい類題を1問作成してください。
                 数値を変え、基本的な理解を確認できるようにしてください。
                 まだ答えは言わないでください。
                 """
@@ -111,10 +130,10 @@ with st.sidebar:
                 st.rerun()
 
         with col_same:
-            if st.button("➡️ 維持"):
-                prompt_text = f"""
+            if st.button("➡️ 維持", key="exam_same"):
+                prompt_text = """
                 【教師へのリクエスト】
-                先ほどの問題と**同じ難易度・同じ解法パターン**の新しい類題を【{num_questions_exam}問】作成してください。
+                先ほどの問題と**同じ難易度・同じ解法パターン**の新しい類題を1問作成してください。
                 数値を変えて、反復練習できるようにしてください。
                 まだ答えは言わないでください。
                 """
@@ -122,17 +141,17 @@ with st.sidebar:
                 st.rerun()
 
         with col_hard:
-            if st.button("↗️ 難しく"):
-                prompt_text = f"""
+            if st.button("↗️ 難しく", key="exam_hard"):
+                prompt_text = """
                 【教師へのリクエスト】
-                先ほどの問題よりも**難易度を上げて（応用的な内容にして）**、新しい類題を【{num_questions_exam}問】作成してください。
+                先ほどの問題よりも**難易度を上げて（応用的な内容にして）**、新しい類題を1問作成してください。
                 計算を複雑にするか、他の単元との融合問題にするなどして、応用力を試してください。
                 まだ答えは言わないでください。
                 """
                 st.session_state.messages.append({"role": "user", "content": prompt_text})
                 st.rerun()
 
-        # ギブアップボタン
+        # ギブアップ
         if st.button("🏳️ ギブアップ（解答を見る）"):
             st.session_state.messages.append({"role": "user", "content": "降参です。正解と解説を教えてください。"})
             st.rerun()
@@ -162,10 +181,9 @@ elif mode == "⚡ 解答確認モード":
     - 結論（答え）を最優先で提示してください。
     """
 elif mode == "⚔️ 演習モード":
-    # ★ここを修正：複数問の採点に対応するよう指示
     system_instruction = base_instruction + """
     【役割：試験監督・コーチ】
-    - 生徒から数値や数式が送られてきた場合、それを「直前の問題（複数ある場合はそれぞれ）に対する解答」とみなして採点してください。
+    - 生徒から数値や数式が送られてきた場合、それを「直前の問題に対する解答」とみなして採点してください。
     
     【採点のルール】
     1. **正解の場合**: 
@@ -173,11 +191,10 @@ elif mode == "⚔️ 演習モード":
        - 解説が終わったら、そこで出力を終了してください（勝手に次の問題を出さない）。
     2. **不正解の場合**: 
        - 答えは教えず、ヒントを出して再挑戦させてください。
-       - 複数問ある場合は、どの問題が合っていて、どれが間違っているか明確にしてください。
     3. **ギブアップの場合**: 
        - 正解と解説を提示して終了してください。
     4. **次の問題（難易度調整）の場合**:
-       - 生徒の指示（易しく/維持/難しく）に従って、難易度を調整した新しい類題を、指定された数だけ出題してください。
+       - 生徒の指示（易しく/維持/難しく）に従って、難易度を調整した新しい類題を1問出題してください。
     """
 
 # --- 5. モデルのセットアップ ---
@@ -224,7 +241,7 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
     if mode == "⚡ 解答確認モード":
         placeholder_text = "解答を知りたい問題を入力"
     elif mode == "⚔️ 演習モード":
-        placeholder_text = "解答を入力（複数問の場合は (1) 5, (2) 10 のように入力）"
+        placeholder_text = "解答を入力（例：x = 2）"
 
     if prompt := st.chat_input(placeholder_text):
         content_to_save = prompt
@@ -233,4 +250,3 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
         
         st.session_state.messages.append({"role": "user", "content": content_to_save})
         st.rerun()
-
