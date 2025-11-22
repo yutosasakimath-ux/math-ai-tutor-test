@@ -1,19 +1,15 @@
 import streamlit as st
 import google.generativeai as genai
-from PIL import Image # 画像処理用ライブラリ
+from PIL import Image
 
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。画像読み取り対応！")
+st.caption("Gemini 2.5 Flash 搭載。履歴を残したままモード切替可能！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# バグ対策：履歴リセット関数
-def reset_conversation():
     st.session_state.messages = []
 
 # --- 3. サイドバー（設定＆モード選択） ---
@@ -34,12 +30,12 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # ★★★ モード選択 ★★★
+    # ★★★ モード選択（履歴リセット機能を削除） ★★★
     mode = st.radio(
         "学習モードを選択",
         ["📖 学習モード", "⚡ 解答確認モード", "⚔️ 演習モード"],
-        index=0,
-        on_change=reset_conversation
+        index=0
+        # on_change=reset_conversation を削除しました
     )
 
     st.markdown("---")
@@ -167,9 +163,9 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # 共通：リセットボタン
+    # 共通：手動リセットボタン（これだけ残します）
     if st.button("🗑️ 会話をリセット", type="primary"):
-        reset_conversation()
+        st.session_state.messages = []
         st.rerun()
 
 # --- 4. モードごとのプロンプト定義 ---
@@ -220,10 +216,10 @@ if api_key:
         st.error(f"モデル設定エラー: {e}")
         st.stop()
 
-# --- 6. チャット表示（画像対応） ---
+# --- 6. チャット表示 ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        # コンテンツが辞書型（テキスト+画像）の場合の処理
+        # 辞書型（画像あり）と文字列型を判別して表示
         content = message["content"]
         if isinstance(content, dict):
             if "image" in content:
@@ -233,7 +229,7 @@ for message in st.session_state.messages:
         else:
             st.markdown(content)
 
-# --- 7. AI応答ロジック（画像対応） ---
+# --- 7. AI応答ロジック ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     if not api_key: st.stop()
     
@@ -241,10 +237,9 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         response_placeholder = st.empty()
         full_response = ""
         try:
-            # 履歴データの作成（画像は過去ログには含めず、テキストのみ抽出してコンテキスト軽量化）
-            # ※現在のAPI仕様上、過去の画像を全て送り続けるとエラーになりやすいため
+            # 履歴データの作成（画像対応）
             history_for_ai = []
-            for m in st.session_state.messages[:-1]: # 最新以外
+            for m in st.session_state.messages[:-1]:
                 if m["role"] != "system":
                     text_content = ""
                     if isinstance(m["content"], dict):
@@ -255,7 +250,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
             chat = model.start_chat(history=history_for_ai)
             
-            # 今回のメッセージ（画像が含まれているかもしれない）
+            # 今回のメッセージ（画像対応）
             current_msg = st.session_state.messages[-1]["content"]
             content_to_send = []
             
@@ -278,13 +273,11 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（画像アップローダー追加） ---
-# AIが考え中の時は入力できないように制御
+# --- 8. 入力エリア（画像アップローダー付き） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
-    # ★ここが新機能：画像アップローダー
     with st.expander("📸 画像をアップロード", expanded=False):
-        uploaded_file = st.file_uploader("問題の写真をアップロードしてください", type=["jpg", "png", "jpeg"])
+        uploaded_file = st.file_uploader("問題の写真をアップロード", type=["jpg", "png", "jpeg"])
 
     placeholder_text = "質問を入力..."
     if mode == "⚡ 解答確認モード":
@@ -293,29 +286,22 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
         placeholder_text = "解答を入力（例：(1) 5, (2) 10 ...）"
 
     if prompt := st.chat_input(placeholder_text):
-        # 送信するデータを作成
         content_to_save = {}
         text_part = prompt
         
-        # 演習モードなら注釈をつける
         if mode == "⚔️ 演習モード":
             text_part = f"【生徒の解答】\n{prompt}\n\n※採点してください。正解なら解説のみを行ってください。"
         
         content_to_save["text"] = text_part
 
-        # 画像があれば追加
         if uploaded_file:
             image_data = Image.open(uploaded_file)
             content_to_save["image"] = image_data
-            # 確認モードならテキストが空でもOK（「この問題を解いて」とみなす）
             if not prompt:
                 content_to_save["text"] = "この画像の数学の問題を解いてください。"
         
-        # テキストか画像のどちらかは必須
+        # テキストか画像があれば送信
         if content_to_save.get("text") or content_to_save.get("image"):
-            # 辞書型として保存する（あとで表示・送信時に振り分けるため）
-            # もし画像がなければテキストだけ保存しても良いが、統一のために辞書にする手もあり
-            # ここではシンプルに、画像がある時だけ辞書にする分岐
             if "image" in content_to_save:
                 st.session_state.messages.append({"role": "user", "content": content_to_save})
             else:
