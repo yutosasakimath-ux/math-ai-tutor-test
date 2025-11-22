@@ -6,7 +6,7 @@ from PIL import Image
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。問題数を自在に設定して演習しよう！")
+st.caption("Gemini 2.5 Flash 搭載。直感的な操作で演習を進めよう！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -114,28 +114,25 @@ with st.sidebar:
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
-        # ★ここが新機能：初回と2回目以降のパラメータを分離
-        st.write("### 🔢 出題数の設定")
-        col_init, col_next = st.columns(2)
-        with col_init:
-            num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
-        with col_next:
-            num_q_next = st.number_input("2回目以降", 1, 5, 1, key="q_next")
-
         st.write("### 🆕 演習スタート")
         topic = st.text_input("演習したい単元（例：二次関数）")
         
+        # ★修正点：開始ボタンの直上に、このボタン専用の数字入力欄を配置
+        num_q_init = st.number_input("出題する問題数", 1, 5, 1, key="q_init")
+        
         if st.button("問題を作成開始"):
-            # 初回の問題数（num_q_init）を使用
             prompt_text = f"【{topic}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
             st.session_state.messages.append({"role": "user", "content": prompt_text})
             st.rerun()
         
         st.markdown("---")
         
-        # 難易度調整ボタン（2回目以降の問題数 num_q_next を使用）
         st.write("### ⏩ 次の問題へ")
         
+        # ★修正点：次へボタンの直上に、このボタン専用の数字入力欄を配置
+        num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
+        
+        st.caption("難易度を選んで次のセットへ")
         col_easy, col_same, col_hard = st.columns(3)
         
         with col_easy:
@@ -292,10 +289,9 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア ---
+# --- 8. 入力エリア（画像リセット機能付き） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
-    # アップローダーのキーを動的に生成
     uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
 
     with st.expander("📸 画像をアップロード", expanded=False):
