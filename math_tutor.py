@@ -12,6 +12,10 @@ st.caption("Gemini 2.5 Flash 搭載。履歴を残したままモード切替可
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# ★追加：画像アップローダーの状態をリセットするためのキー
+if "uploader_key" not in st.session_state:
+    st.session_state["uploader_key"] = 0
+
 # --- 3. サイドバー（設定＆モード選択） ---
 with st.sidebar:
     st.header("⚙️ 設定・モード切替")
@@ -30,12 +34,11 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # ★★★ モード選択（履歴リセット機能を削除） ★★★
+    # ★★★ モード選択 ★★★
     mode = st.radio(
         "学習モードを選択",
         ["📖 学習モード", "⚡ 解答確認モード", "⚔️ 演習モード"],
         index=0
-        # on_change=reset_conversation を削除しました
     )
 
     st.markdown("---")
@@ -163,7 +166,7 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # 共通：手動リセットボタン（これだけ残します）
+    # 共通：手動リセットボタン
     if st.button("🗑️ 会話をリセット", type="primary"):
         st.session_state.messages = []
         st.rerun()
@@ -219,7 +222,6 @@ if api_key:
 # --- 6. チャット表示 ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        # 辞書型（画像あり）と文字列型を判別して表示
         content = message["content"]
         if isinstance(content, dict):
             if "image" in content:
@@ -237,7 +239,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         response_placeholder = st.empty()
         full_response = ""
         try:
-            # 履歴データの作成（画像対応）
             history_for_ai = []
             for m in st.session_state.messages[:-1]:
                 if m["role"] != "system":
@@ -250,7 +251,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
             chat = model.start_chat(history=history_for_ai)
             
-            # 今回のメッセージ（画像対応）
             current_msg = st.session_state.messages[-1]["content"]
             content_to_send = []
             
@@ -260,7 +260,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             else:
                 content_to_send.append(current_msg)
 
-            # 送信
             response = chat.send_message(content_to_send, stream=True)
             
             for chunk in response:
@@ -273,11 +272,15 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（画像アップローダー付き） ---
+# --- 8. 入力エリア（画像リセット機能付き） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
+    # ★修正点1: file_uploaderに動的なkeyを設定する
+    # keyが変わると、Streamlitは新しいコンポーネントとして再描画するため、中身がリセットされる
+    uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
+
     with st.expander("📸 画像をアップロード", expanded=False):
-        uploaded_file = st.file_uploader("問題の写真をアップロード", type=["jpg", "png", "jpeg"])
+        uploaded_file = st.file_uploader("問題の写真をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
 
     placeholder_text = "質問を入力..."
     if mode == "⚡ 解答確認モード":
@@ -306,5 +309,8 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                 st.session_state.messages.append({"role": "user", "content": content_to_save})
             else:
                 st.session_state.messages.append({"role": "user", "content": text_part})
+            
+            # ★修正点2: 送信が完了したら、キーの値を変更して次のアップローダーを空にする
+            st.session_state["uploader_key"] += 1
             
             st.rerun()
