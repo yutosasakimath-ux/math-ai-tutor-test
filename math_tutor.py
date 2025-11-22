@@ -5,7 +5,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("モードを選んで学習を始めよう！")
+st.caption("Gemini 2.5 Flash 搭載。レベル調整機能で実力を伸ばそう！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -74,7 +74,7 @@ with st.sidebar:
     elif mode == "⚡ 解答確認モード":
         st.warning("📸 解答が知りたい問題を入力（または画像をアップ）してください。即座に答えを提示します。")
     
-    # --- ■ 3. 演習モード（修正：ボタン操作式に戻しました） ---
+    # --- ■ 3. 演習モード（難易度調整機能を追加！） ---
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
@@ -87,17 +87,44 @@ with st.sidebar:
         
         st.markdown("---")
         
-        # ★ここが重要！手動で次の問題に行くボタン
-        st.write("### ⏩ 次のステップ")
-        if st.button("次の問題へ（類題）", type="primary"):
-            prompt_text = """
-            【教師へのリクエスト】
-            先ほど解説した問題と「同じ単元・難易度」の**新しい類題**を1問作成してください。
-            数値を変えて、再び練習できるようにしてください。
-            まだ答えは言わないでください。
-            """
-            st.session_state.messages.append({"role": "user", "content": prompt_text})
-            st.rerun()
+        # ★ここを大幅アップデート！難易度調整ボタン
+        st.write("### ⏩ 次の問題へ")
+        
+        # ボタンを横並びにする
+        col_easy, col_same, col_hard = st.columns(3)
+        
+        with col_easy:
+            if st.button("↘️ 易しく", help="基礎的な問題に戻ります"):
+                prompt_text = """
+                【教師へのリクエスト】
+                先ほどの問題よりも**難易度を下げて（基礎的な内容にして）**、新しい類題を1問作成してください。
+                数値を変え、基本的な理解を確認できるようにしてください。
+                まだ答えは言わないでください。
+                """
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
+
+        with col_same:
+            if st.button("➡️ 維持", help="同じレベルの問題を出します"):
+                prompt_text = """
+                【教師へのリクエスト】
+                先ほどの問題と**同じ難易度・同じ解法パターン**の新しい類題を1問作成してください。
+                数値を変えて、反復練習できるようにしてください。
+                まだ答えは言わないでください。
+                """
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
+
+        with col_hard:
+            if st.button("↗️ 難しく", help="応用問題に挑戦します"):
+                prompt_text = """
+                【教師へのリクエスト】
+                先ほどの問題よりも**難易度を上げて（応用的な内容にして）**、新しい類題を1問作成してください。
+                計算を複雑にするか、他の単元との融合問題にするなどして、応用力を試してください。
+                まだ答えは言わないでください。
+                """
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
 
         # ギブアップボタン
         if st.button("🏳️ ギブアップ（解答を見る）"):
@@ -129,7 +156,7 @@ elif mode == "⚡ 解答確認モード":
     - 結論（答え）を最優先で提示してください。
     """
 elif mode == "⚔️ 演習モード":
-    # ★ここを修正：勝手に次の問題を出さないように厳しく指示★
+    # ★ここを修正：難易度調整に対応できるように指示を変更
     system_instruction = base_instruction + """
     【役割：試験監督・コーチ】
     - 生徒から数値や数式が送られてきた場合、それを「直前の問題に対する解答」とみなして採点してください。
@@ -137,13 +164,13 @@ elif mode == "⚔️ 演習モード":
     【採点のルール】
     1. **正解の場合**: 
        - 「正解です！」と褒めて、詳しい解説を行ってください。
-       - **重要：解説が終わったら、そこで出力を終了してください。頼まれていないのに勝手に次の問題を出題しないでください。**
+       - 解説が終わったら、そこで出力を終了してください（勝手に次の問題を出さない）。
     2. **不正解の場合**: 
        - 答えは教えず、ヒントを出して再挑戦させてください。
     3. **ギブアップの場合**: 
        - 正解と解説を提示して終了してください。
-    4. **「次の問題へ」と指示された場合**:
-       - 直前の問題の類題（数値変え）を作成してください。
+    4. **次の問題（難易度調整）の場合**:
+       - 生徒の指示（易しく/維持/難しく）に従って、難易度を調整した新しい類題を出題してください。
     """
 
 # --- 5. モデルのセットアップ ---
@@ -195,7 +222,6 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
     if prompt := st.chat_input(placeholder_text):
         content_to_save = prompt
         if mode == "⚔️ 演習モード":
-            # 採点依頼タグ
             content_to_save = f"【生徒の解答】\n{prompt}\n\n※採点してください。正解なら解説のみを行ってください（次の問題は出さないでください）。"
         
         st.session_state.messages.append({"role": "user", "content": content_to_save})
