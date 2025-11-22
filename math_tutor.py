@@ -74,7 +74,7 @@ with st.sidebar:
     elif mode == "⚡ 解答確認モード":
         st.warning("📸 解答が知りたい問題を入力（または画像をアップ）してください。即座に答えを提示します。")
     
-    # --- ■ 3. 演習モードの機能（ここを強化！） ---
+    # --- ■ 3. 演習モードの機能 ---
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
@@ -84,15 +84,28 @@ with st.sidebar:
         )
         st.session_state['feedback_style'] = feedback_style
 
-        topic = st.text_input("演習したい単元（例：二次関数、確率）")
+        st.write("### 🆕 新しい問題")
+        topic = st.text_input("演習したい単元（例：二次関数）")
         if st.button("問題を作成開始"):
             prompt_text = f"【{topic}】に関する練習問題を1問出題してください。まだ答えは言わないでください。"
             st.session_state.messages.append({"role": "user", "content": prompt_text})
             st.rerun()
         
         st.markdown("---")
-        # ★追加機能：ギブアップボタン
-        # 間違えて再挑戦中に、どうしても答えが見たくなった時に使います
+        
+        # ★追加機能：演習モード内での類題作成ボタン
+        st.write("### 🔄 反復練習")
+        if st.button("今の問題の類題に挑戦"):
+            prompt_text = """
+            【教師へのリクエスト】
+            直前の問題と「同じ単元」「同じ解法パターン」を使う類題を1問作成してください。
+            数値を変えて、再び練習できるようにしてください。
+            まだ答えは言わないでください。
+            """
+            st.session_state.messages.append({"role": "user", "content": prompt_text})
+            st.rerun()
+
+        st.markdown("---")
         if st.button("🏳️ ギブアップ（解答を見る）"):
             st.session_state.messages.append({"role": "user", "content": "降参です。正解と解説を教えてください。"})
             st.rerun()
@@ -131,7 +144,6 @@ elif mode == "⚔️ 演習モード":
     else:
         style_instruction = "正解発表時は、詳しく解説してください。"
 
-    # ★ここが修正ポイント！再挑戦を促す指示を追加★
     system_instruction = base_instruction + f"""
     【役割：試験監督・コーチ】
     - 生徒から数値や数式が送られてきた場合、それを「直前の問題に対する解答」とみなして採点してください。
@@ -143,6 +155,7 @@ elif mode == "⚔️ 演習モード":
        - 「不正解です」とだけ伝え、どこに着目すべきか**ヒント**を出してください。
        - 「もう一度解いてみますか？それとも解答を見ますか？」と生徒に問いかけてください。
     3. **ギブアップの場合**: 生徒が「ギブアップ」「答えを教えて」と言った場合のみ、正解と解説を提示してください。
+    4. **類題作成の場合**: 直前の問題の数値を変えた、同じ難易度の問題を出題してください。
     """
 
 # --- 5. モデルのセットアップ ---
@@ -193,7 +206,6 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
 
     if prompt := st.chat_input(placeholder_text):
         content_to_save = prompt
-        # 演習モードの場合は「採点依頼」であることを明確にするタグ付け
         if mode == "⚔️ 演習モード":
             content_to_save = f"【生徒の解答】\n{prompt}\n\n※採点してください。間違っていたら答えは言わず、ヒントだけ出してください。"
         
