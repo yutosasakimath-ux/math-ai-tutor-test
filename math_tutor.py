@@ -7,7 +7,7 @@ from streamlit_drawable_canvas import st_canvas
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。手書き・画像・テキストなんでもござれ！")
+st.caption("Gemini 2.5 Flash 搭載。手書きも画像もテキストもOK！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -23,35 +23,7 @@ if "canvas_key" not in st.session_state:
 if "input_text_buffer" not in st.session_state:
     st.session_state["input_text_buffer"] = ""
 
-# --- カウンター関数 ---
-def render_counter(label, key, min_value=1, max_value=5, default=1):
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-    st.write(label)
-    col_minus, col_val, col_plus = st.columns([1, 2, 1])
-
-    with col_minus:
-        if st.button("➖", key=f"{key}_minus"):
-            if st.session_state[key] > min_value:
-                st.session_state[key] -= 1
-                st.rerun()
-
-    with col_val:
-        st.markdown(
-            f"<div style='text-align: center; font-weight: bold; font-size: 20px; padding-top: 5px;'>{st.session_state[key]} 問</div>",
-            unsafe_allow_html=True
-        )
-
-    with col_plus:
-        if st.button("➕", key=f"{key}_plus"):
-            if st.session_state[key] < max_value:
-                st.session_state[key] += 1
-                st.rerun()
-    
-    return st.session_state[key]
-
-# --- 数式ボタン関数 ---
+# 数式ボタン関数
 def math_button(label, insert_text, key):
     if st.button(label, key=key):
         st.session_state["input_text_buffer"] = st.session_state.get("input_text_buffer", "") + insert_text + " "
@@ -88,7 +60,9 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        num_questions_learn = render_counter("類題の数", "num_learn")
+        
+        # ★修正：数値入力ボックス(st.number_input)に戻しました
+        num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
         st.caption("難易度を選んで出題")
         l_col1, l_col2, l_col3 = st.columns(3)
@@ -152,8 +126,9 @@ with st.sidebar:
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
+        # ★修正：数値入力ボックス(st.number_input)に戻しました
         st.write("### 🔢 設定")
-        num_q_init = render_counter("初回の出題数", "q_init")
+        num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
         
         st.write("### 🆕 演習スタート")
         
@@ -187,7 +162,9 @@ with st.sidebar:
         st.markdown("---")
         
         st.write("### ⏩ 次の問題へ")
-        num_q_next = render_counter("次に出す問題数", "q_next")
+        
+        # ★修正：数値入力ボックス(st.number_input)に戻しました
+        num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
         
         st.caption("難易度を選んで次のセットへ")
         col_easy, col_same, col_hard = st.columns(3)
@@ -243,7 +220,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-    # --- 数式パレット ---
+    # 数式パレット
     st.markdown("---")
     with st.expander("🧮 数式ボタン（タップで追加）", expanded=False):
         tab1, tab2, tab3, tab4 = st.tabs(["基本", "関数", "微積", "ベクトル"])
@@ -399,7 +376,7 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
     uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
     canvas_key = f"canvas_{st.session_state['canvas_key']}"
 
-    # ★修正：入力モードをラジオボタンで切り替え（タブを使わない）
+    # 入力方法をラジオボタンで切り替え（タブによるバグ回避のため）
     st.write("### 📝 入力方法を選択")
     input_method = st.radio(
         "入力方法",
