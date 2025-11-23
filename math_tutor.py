@@ -1,18 +1,21 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
+import numpy as np # 画像変換用
+
+# ★追加ライブラリ
+from streamlit_drawable_canvas import st_canvas
 
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。シンプルで使いやすい演習アプリ！")
+st.caption("Gemini 2.5 Flash 搭載。手書き入力で直感的に質問しよう！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 画像アップローダーのリセット用キー
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
 
@@ -48,8 +51,6 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        
-        # ★修正：数値入力ボックス(st.number_input)に戻しました
         num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
         st.caption("難易度を選んで出題")
@@ -114,6 +115,9 @@ with st.sidebar:
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
+        st.write("### 🔢 設定")
+        num_q_init = st.number_input("出題する問題数", min_value=1, max_value=5, value=1, key="q_init")
+        
         st.write("### 🆕 演習スタート")
         
         math_curriculum = {
@@ -135,9 +139,6 @@ with st.sidebar:
             selected_topic = st.selectbox("単元を選択", math_curriculum[selected_subject])
             topic_for_prompt = f"{selected_subject}の{selected_topic}"
 
-        # ★修正：数値入力ボックス(st.number_input)に戻しました
-        num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
-        
         if st.button("問題を作成開始"):
             if not topic_for_prompt:
                 st.error("単元を選択してください。")
@@ -149,8 +150,6 @@ with st.sidebar:
         st.markdown("---")
         
         st.write("### ⏩ 次の問題へ")
-        
-        # ★修正：数値入力ボックス(st.number_input)に戻しました
         num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
         
         st.caption("難易度を選んで次のセットへ")
@@ -211,7 +210,7 @@ with st.sidebar:
 
 base_instruction = """
 あなたは日本の高校数学教師です。数式は必ずLaTeX形式（$マーク）で書いてください。
-画像が送られた場合、その画像に書かれている数式や図形を読み取り、質問に答えてください。
+画像（手書きの数式や図形含む）が送られた場合、それを読み取り、数学的に解釈して応答してください。
 """
 
 if mode == "📖 学習モード":
@@ -310,41 +309,92 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（画像リセット機能付き・標準チャット入力） ---
+# --- 8. 入力エリア（手書き・画像・テキスト） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
     uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
 
-    with st.expander("📸 画像をアップロード", expanded=False):
-        uploaded_file = st.file_uploader("問題の写真をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
+    # カラム分けで「画像アップロード」と「手書き」を並べる
+    col_upload, col_canvas = st.columns(2)
+    
+    # 1. 画像アップロード
+    with col_upload:
+        with st.expander("📸 画像をアップロード", expanded=False):
+            uploaded_file = st.file_uploader("問題の写真をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
 
+    # 2. 手書き入力 (Canvas)
+    canvas_result = None
+    with col_canvas:
+        with st.expander("📝 手書き入力ボード", expanded=False):
+            # st_canvasで手書きエリアを作成
+            canvas_result = st_canvas(
+                fill_color="rgba(255, 165, 0, 0.3)",
+                stroke_width=3,
+                stroke_color="#000000",
+                background_color="#ffffff",
+                height=200,
+                width=300,
+                drawing_mode="freedraw",
+                key="canvas",
+            )
+            # 手書き送信ボタン
+            send_canvas = st.button("手書きを送信")
+
+    # 3. テキスト入力
     placeholder_text = "質問を入力..."
     if mode == "⚡ 解答確認モード":
         placeholder_text = "解答を知りたい問題を入力（または画像を送信）"
     elif mode == "⚔️ 演習モード":
         placeholder_text = "解答を入力（例：(1) 5, (2) 10 ...）"
 
-    # ★修正：標準のchat_inputに戻しました
-    if prompt := st.chat_input(placeholder_text):
-        content_to_save = {}
-        text_part = prompt
-        
+    chat_input = st.chat_input(placeholder_text)
+
+    # --- 送信処理 ---
+    content_to_save = {}
+    should_submit = False
+
+    # A. チャット入力で送信された場合
+    if chat_input:
+        text_part = chat_input
         if mode == "⚔️ 演習モード":
-            text_part = f"【生徒の解答】\n{prompt}\n\n※採点してください。正解なら解説のみを行ってください。"
+            text_part = f"【生徒の解答】\n{chat_input}\n\n※採点してください。正解なら解説のみを行ってください。"
         
         content_to_save["text"] = text_part
-
+        
+        # 画像もあれば追加
         if uploaded_file:
             image_data = Image.open(uploaded_file)
             content_to_save["image"] = image_data
-            if not prompt:
-                content_to_save["text"] = "この画像の数学の問題を解いてください。"
         
-        if content_to_save.get("text") or content_to_save.get("image"):
-            if "image" in content_to_save:
-                st.session_state.messages.append({"role": "user", "content": content_to_save})
-            else:
-                st.session_state.messages.append({"role": "user", "content": text_part})
-            
-            st.session_state["uploader_key"] += 1
-            st.rerun()
+        should_submit = True
+
+    # B. 手書きボタンで送信された場合
+    elif send_canvas and canvas_result is not None and canvas_result.image_data is not None:
+        # キャンバスのデータをPIL画像に変換
+        img_data = canvas_result.image_data.astype('uint8')
+        # RGBAからRGBへ（背景が透明だと黒くなるので、白背景と合成するのがベストだが、簡易的に変換）
+        # 数学AI用途ならRGBAのままでもGeminiは読めることが多いが、念のためRGB変換
+        pil_image = Image.fromarray(img_data, "RGBA")
+        
+        # 背景を白にする処理（透明部分を白に）
+        background = Image.new("RGB", pil_image.size, (255, 255, 255))
+        background.paste(pil_image, mask=pil_image.split()[3]) # alpha channel as mask
+        
+        content_to_save["image"] = background
+        content_to_save["text"] = "この手書きの数式・図形を読み取ってください。"
+        
+        if mode == "⚔️ 演習モード":
+            content_to_save["text"] = "【生徒の手書き解答】\nこの画像を解答として採点してください。"
+
+        should_submit = True
+
+    # 送信実行
+    if should_submit:
+        if "image" in content_to_save:
+            st.session_state.messages.append({"role": "user", "content": content_to_save})
+        else:
+            st.session_state.messages.append({"role": "user", "content": content_to_save["text"]})
+        
+        # アップローダーのリセット
+        st.session_state["uploader_key"] += 1
+        st.rerun()
