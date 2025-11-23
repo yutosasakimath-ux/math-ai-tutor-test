@@ -1,18 +1,18 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
+import datetime
 
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。直感的な操作で演習を進めよう！")
+st.caption("Gemini 2.5 Flash 搭載。数式は「なんとなく」で伝わります！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 画像アップローダーのリセット用キー
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
 
@@ -48,7 +48,6 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        # 学習モード用の問題数
         num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
         # 難易度調整ボタン
@@ -119,7 +118,6 @@ with st.sidebar:
         
         st.write("### 🆕 演習スタート")
         
-        # 単元選択メニュー
         math_curriculum = {
             "数学I": ["数と式", "集合と命題", "二次関数", "図形と計量", "データの分析"],
             "数学A": ["場合の数と確率", "図形の性質", "整数の性質"],
@@ -206,29 +204,37 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
+    # ★★★ 改良版：コピペ数式パレット ★★★
     st.markdown("---")
+    st.write("🧮 **数式コピペパレット**")
+    st.caption("右上のアイコンでコピーできます")
     
-    # ★学習履歴保存機能を削除し、数式ヘルプのみ残しました
-    with st.expander("🧮 数式の書き方ヘルプ"):
-        st.markdown("""
-        AIに数式を伝えるときは、以下のように書くとスムーズです。
-        
-        | 記号 | 書き方 | 例 |
-        |---|---|---|
-        | 分数 | `a/b` | 1/2 |
-        | 累乗 | `x^2` | x^2 |
-        | ルート | `\sqrt{x}` | \sqrt{2} |
-        | かける | `*` または `\times` | 2 * 3 |
-        | わる | `/` または `\div` | 6 / 2 |
-        | パイ | `\pi` | 2\pi r |
-        | 積分 | `\int` | \int x dx |
-        """)
+    # よく使う記号をコピーしやすい形式で配置
+    pc1, pc2, pc3 = st.columns(3)
+    with pc1:
+        st.code("x^2", language="text") # 2乗
+        st.code("\\sqrt{x}", language="text") # ルート
+    with pc2:
+        st.code("a/b", language="text") # 分数
+        st.code("\\pi", language="text") # パイ
+    with pc3:
+        st.code("\\int", language="text") # 積分
+        st.code("\\vec{a}", language="text") # ベクトル
 
 # --- 4. モードごとのプロンプト定義 ---
 
 base_instruction = """
 あなたは日本の高校数学教師です。数式は必ずLaTeX形式（$マーク）で書いてください。
 画像が送られた場合、その画像に書かれている数式や図形を読み取り、質問に答えてください。
+
+【生徒の入力についての重要ルール】
+生徒はLaTeXを使わず、「x^2」「ルート3」「インテグラル」などの**直感的な表記（自然言語や簡易記法）**で数式を入力します。
+あなたはそれらを文脈から正しく数学的に解釈して応答してください。
+例：
+- "x2" や "x^2" -> $x^2$
+- "ルート3" -> $\sqrt{3}$
+- "1/2" -> $\\frac{1}{2}$
+- "インテグラル" -> 積分記号
 """
 
 if mode == "📖 学習モード":
