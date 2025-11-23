@@ -6,7 +6,7 @@ from PIL import Image
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。ボタン選択でサクサク演習！")
+st.caption("Gemini 2.5 Flash 搭載。直感的な操作で演習を進めよう！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -15,6 +15,38 @@ if "messages" not in st.session_state:
 # 画像アップローダーのリセット用キー
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
+
+# ★新機能：プラスマイナスカウンターを表示する関数
+def render_counter(label, key, min_value=1, max_value=5, default=1):
+    # セッションステートの初期化
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+    st.write(label)
+    
+    # 3つのカラムを作る（[ - ] [ 数字 ] [ + ]）
+    col_minus, col_val, col_plus = st.columns([1, 2, 1])
+
+    with col_minus:
+        if st.button("➖", key=f"{key}_minus"):
+            if st.session_state[key] > min_value:
+                st.session_state[key] -= 1
+                st.rerun()
+
+    with col_val:
+        # 真ん中に現在の数字を大きく表示
+        st.markdown(
+            f"<div style='text-align: center; font-weight: bold; font-size: 20px; padding-top: 5px;'>{st.session_state[key]} 問</div>",
+            unsafe_allow_html=True
+        )
+
+    with col_plus:
+        if st.button("➕", key=f"{key}_plus"):
+            if st.session_state[key] < max_value:
+                st.session_state[key] += 1
+                st.rerun()
+    
+    return st.session_state[key]
 
 # --- 3. サイドバー（設定＆モード選択） ---
 with st.sidebar:
@@ -48,10 +80,10 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        # 学習モードの問題数もボタン選択式に変更（統一感のため）
-        num_questions_learn = st.radio("類題の数", [1, 2, 3, 4, 5], horizontal=True, key="num_learn")
         
-        # 難易度調整ボタン
+        # ★修正：プラスマイナスカウンターを使用
+        num_questions_learn = render_counter("類題の数", "num_learn")
+        
         st.caption("難易度を選んで出題")
         l_col1, l_col2, l_col3 = st.columns(3)
         
@@ -110,15 +142,15 @@ with st.sidebar:
     elif mode == "⚡ 解答確認モード":
         st.warning("📸 解答が知りたい問題を入力（または画像をアップ）してください。即座に答えを提示します。")
     
-    # --- ■ 3. 演習モード（ここを修正！） ---
+    # --- ■ 3. 演習モード ---
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
         st.write("### 🆕 演習スタート")
         topic = st.text_input("演習したい単元（例：二次関数）")
         
-        # ★修正点1：数字入力(number_input)を、ボタン選択(radio)に変更
-        num_q_init = st.radio("初回の出題数", [1, 2, 3, 4, 5], horizontal=True, key="q_init")
+        # ★修正：プラスマイナスカウンターを使用
+        num_q_init = render_counter("初回の出題数", "q_init")
         
         if st.button("問題を作成開始"):
             prompt_text = f"【{topic}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
@@ -129,8 +161,8 @@ with st.sidebar:
         
         st.write("### ⏩ 次の問題へ")
         
-        # ★修正点2：ここもボタン選択に変更
-        num_q_next = st.radio("次に出す問題数", [1, 2, 3, 4, 5], horizontal=True, key="q_next")
+        # ★修正：プラスマイナスカウンターを使用
+        num_q_next = render_counter("次に出す問題数", "q_next")
         
         st.caption("難易度を選んで次のセットへ")
         col_easy, col_same, col_hard = st.columns(3)
@@ -289,7 +321,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（画像リセット機能付き） ---
+# --- 8. 入力エリア ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
     uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
