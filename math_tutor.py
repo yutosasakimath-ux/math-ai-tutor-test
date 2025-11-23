@@ -7,7 +7,7 @@ import datetime
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。数式は「なんとなく」で伝わります！")
+st.caption("Gemini 2.5 Flash 搭載。数式パレットで複雑な式もラクラク入力！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -15,6 +15,34 @@ if "messages" not in st.session_state:
 
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
+
+# カウンター関数
+def render_counter(label, key, min_value=1, max_value=5, default=1):
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+    st.write(label)
+    col_minus, col_val, col_plus = st.columns([1, 2, 1])
+
+    with col_minus:
+        if st.button("➖", key=f"{key}_minus"):
+            if st.session_state[key] > min_value:
+                st.session_state[key] -= 1
+                st.rerun()
+
+    with col_val:
+        st.markdown(
+            f"<div style='text-align: center; font-weight: bold; font-size: 20px; padding-top: 5px;'>{st.session_state[key]} 問</div>",
+            unsafe_allow_html=True
+        )
+
+    with col_plus:
+        if st.button("➕", key=f"{key}_plus"):
+            if st.session_state[key] < max_value:
+                st.session_state[key] += 1
+                st.rerun()
+    
+    return st.session_state[key]
 
 # --- 3. サイドバー（設定＆モード選択） ---
 with st.sidebar:
@@ -48,7 +76,7 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
+        num_questions_learn = render_counter("類題の数", "num_learn")
         
         # 難易度調整ボタン
         st.caption("難易度を選んで出題")
@@ -113,9 +141,6 @@ with st.sidebar:
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
-        st.write("### 🔢 設定")
-        num_q_init = st.number_input("出題する問題数", min_value=1, max_value=5, value=1, key="q_init")
-        
         st.write("### 🆕 演習スタート")
         
         math_curriculum = {
@@ -137,6 +162,8 @@ with st.sidebar:
             selected_topic = st.selectbox("単元を選択", math_curriculum[selected_subject])
             topic_for_prompt = f"{selected_subject}の{selected_topic}"
 
+        num_q_init = render_counter("初回の出題数", "q_init")
+        
         if st.button("問題を作成開始"):
             if not topic_for_prompt:
                 st.error("単元を選択してください。")
@@ -148,7 +175,8 @@ with st.sidebar:
         st.markdown("---")
         
         st.write("### ⏩ 次の問題へ")
-        num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
+        
+        num_q_next = render_counter("次に出す問題数", "q_next")
         
         st.caption("難易度を選んで次のセットへ")
         col_easy, col_same, col_hard = st.columns(3)
@@ -204,22 +232,69 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-    # ★★★ 改良版：コピペ数式パレット ★★★
+    # ★★★ 数式パレット（超強化版） ★★★
     st.markdown("---")
-    st.write("🧮 **数式コピペパレット**")
-    st.caption("右上のアイコンでコピーできます")
-    
-    # よく使う記号をコピーしやすい形式で配置
-    pc1, pc2, pc3 = st.columns(3)
-    with pc1:
-        st.code("x^2", language="text") # 2乗
-        st.code("\\sqrt{x}", language="text") # ルート
-    with pc2:
-        st.code("a/b", language="text") # 分数
-        st.code("\\pi", language="text") # パイ
-    with pc3:
-        st.code("\\int", language="text") # 積分
-        st.code("\\vec{a}", language="text") # ベクトル
+    with st.expander("🧮 数式コピペパレット", expanded=False):
+        st.caption("コピーして数字を変えて使ってください")
+        
+        # タブでカテゴリー分け
+        tab1, tab2, tab3, tab4 = st.tabs(["記号・集合", "関数・式", "微積・極限", "ベクトル・他"])
+        
+        with tab1:
+            st.write("基本的な記号・集合")
+            col_sym1, col_sym2 = st.columns(2)
+            with col_sym1:
+                st.code("a/b", language="text") # 分数
+                st.code("\\sqrt{x}", language="text") # ルート
+                st.code("\\pm", language="text") # プラマイ
+                st.code("\\neq", language="text") # ノットイコール
+                st.code("\\leqq", language="text") # 以下
+            with col_sym2:
+                st.code("\\in", language="text") # 属する
+                st.code("\\subset", language="text") # 部分集合
+                st.code("\\cap", language="text") # 共通部分
+                st.code("\\cup", language="text") # 和集合
+                st.code("\\overline{A}", language="text") # 補集合
+
+        with tab2:
+            st.write("関数・三角関数")
+            col_func1, col_func2 = st.columns(2)
+            with col_func1:
+                st.code("x^2", language="text") # 2乗
+                st.code("x^{n}", language="text") # n乗
+                st.code("|x|", language="text") # 絶対値
+                st.code("\\log_{a} x", language="text") # 対数
+            with col_func2:
+                st.code("\\pi", language="text") # パイ
+                st.code("\\sin \\theta", language="text") # sin
+                st.code("\\cos \\theta", language="text") # cos
+                st.code("\\tan \\theta", language="text") # tan
+
+        with tab3:
+            st.write("微分・積分・極限")
+            col_cal1, col_cal2 = st.columns(2)
+            with col_cal1:
+                st.code("\\lim_{x \\to \\infty}", language="text") # 極限
+                st.code("\\sum_{k=1}^{n}", language="text") # シグマ
+                st.code("f'(x)", language="text") # 微分
+            with col_cal2:
+                st.code("\\int", language="text") # 積分記号
+                st.code("\\int_{a}^{b} f(x)dx", language="text") # 定積分
+                st.code("\\frac{dy}{dx}", language="text") # dy/dx
+
+        with tab4:
+            st.write("ベクトル・確率・その他")
+            col_vec1, col_vec2 = st.columns(2)
+            with col_vec1:
+                st.code("\\vec{a}", language="text") # ベクトルa
+                st.code("\\vec{AB}", language="text") # ベクトルAB
+                st.code("|\\vec{a}|", language="text") # 大きさ
+                st.code("\\vec{a} \\cdot \\vec{b}", language="text") # 内積
+            with col_vec2:
+                st.code("_{n}C_{r}", language="text") # 組み合わせ
+                st.code("_{n}P_{r}", language="text") # 順列
+                st.code("P(A \\cap B)", language="text") # 確率
+                st.code("\\bar{x}", language="text") # 平均
 
 # --- 4. モードごとのプロンプト定義 ---
 
@@ -228,13 +303,8 @@ base_instruction = """
 画像が送られた場合、その画像に書かれている数式や図形を読み取り、質問に答えてください。
 
 【生徒の入力についての重要ルール】
-生徒はLaTeXを使わず、「x^2」「ルート3」「インテグラル」などの**直感的な表記（自然言語や簡易記法）**で数式を入力します。
+生徒はLaTeXを使わず、「x^2」「ルート3」「インテグラル」などの直感的な表記や、パレットからコピーしたLaTeXコードで入力します。
 あなたはそれらを文脈から正しく数学的に解釈して応答してください。
-例：
-- "x2" や "x^2" -> $x^2$
-- "ルート3" -> $\sqrt{3}$
-- "1/2" -> $\\frac{1}{2}$
-- "インテグラル" -> 積分記号
 """
 
 if mode == "📖 学習モード":
