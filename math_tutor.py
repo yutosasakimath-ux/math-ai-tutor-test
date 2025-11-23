@@ -1,23 +1,64 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
-import numpy as np # 画像変換用
-
-# ★追加ライブラリ
-from streamlit_drawable_canvas import st_canvas
+import datetime
+from streamlit_drawable_canvas import st_canvas # 手書き用ライブラリ
 
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。手書き入力で直感的に質問しよう！")
+st.caption("Gemini 2.5 Flash 搭載。タブ切り替えで手書きもスムーズ！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# 各種リセット用キー
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
+if "canvas_key" not in st.session_state:
+    st.session_state["canvas_key"] = 0
+
+# カウンター関数
+def render_counter(label, key, min_value=1, max_value=5, default=1):
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+    st.write(label)
+    col_minus, col_val, col_plus = st.columns([1, 2, 1])
+
+    with col_minus:
+        if st.button("➖", key=f"{key}_minus"):
+            if st.session_state[key] > min_value:
+                st.session_state[key] -= 1
+                st.rerun()
+
+    with col_val:
+        st.markdown(
+            f"<div style='text-align: center; font-weight: bold; font-size: 20px; padding-top: 5px;'>{st.session_state[key]} 問</div>",
+            unsafe_allow_html=True
+        )
+
+    with col_plus:
+        if st.button("➕", key=f"{key}_plus"):
+            if st.session_state[key] < max_value:
+                st.session_state[key] += 1
+                st.rerun()
+    
+    return st.session_state[key]
+
+# 数式ボタン関数
+def math_button(label, insert_text, key):
+    if st.button(label, key=key):
+        # ※標準のchat_inputにはプログラムから値をセットできないため、
+        # クリップボードにコピーする案内か、あるいは後述のテキストエリア方式にする必要があります。
+        # 今回はタブ式入力フォームを採用するため、session_stateに保存してテキストエリアに反映させます。
+        st.session_state["input_text_buffer"] = st.session_state.get("input_text_buffer", "") + insert_text + " "
+
+# 入力バッファの初期化
+if "input_text_buffer" not in st.session_state:
+    st.session_state["input_text_buffer"] = ""
 
 # --- 3. サイドバー（設定＆モード選択） ---
 with st.sidebar:
@@ -51,8 +92,9 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
+        num_questions_learn = render_counter("類題の数", "num_learn")
         
+        # 難易度調整ボタン
         st.caption("難易度を選んで出題")
         l_col1, l_col2, l_col3 = st.columns(3)
         
@@ -116,7 +158,7 @@ with st.sidebar:
         st.success("📝 問題を出題し、採点します。")
         
         st.write("### 🔢 設定")
-        num_q_init = st.number_input("出題する問題数", min_value=1, max_value=5, value=1, key="q_init")
+        num_q_init = render_counter("初回の出題数", "q_init")
         
         st.write("### 🆕 演習スタート")
         
@@ -150,7 +192,7 @@ with st.sidebar:
         st.markdown("---")
         
         st.write("### ⏩ 次の問題へ")
-        num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
+        num_q_next = render_counter("次に出す問題数", "q_next")
         
         st.caption("難易度を選んで次のセットへ")
         col_easy, col_same, col_hard = st.columns(3)
@@ -206,11 +248,59 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
+    # 数式パレット（入力バッファに反映されるようにボタンを設置）
+    st.markdown("---")
+    with st.expander("🧮 数式ボタン（タップで追加）", expanded=False):
+        tab1, tab2, tab3, tab4 = st.tabs(["基本", "関数", "微積", "ベクトル"])
+        
+        with tab1:
+            c1, c2, c3 = st.columns(3)
+            with c1: math_button("分数", "(分子)/(分母)", "btn_frac")
+            with c2: math_button("√", "ルート()", "btn_sqrt")
+            with c3: math_button("^2", "^2", "btn_sq")
+            c4, c5, c6 = st.columns(3)
+            with c4: math_button("≠", "≠", "btn_neq")
+            with c5: math_button("≦", "≦", "btn_leq")
+            with c6: math_button("≧", "≧", "btn_geq")
+
+        with tab2:
+            c1, c2, c3 = st.columns(3)
+            with c1: math_button("sin", "sin(θ)", "btn_sin")
+            with c2: math_button("cos", "cos(θ)", "btn_cos")
+            with c3: math_button("tan", "tan(θ)", "btn_tan")
+            c4, c5, c6 = st.columns(3)
+            with c4: math_button("log", "log_a(x)", "btn_log")
+            with c5: math_button("|x|", "|x|", "btn_abs")
+            with c6: math_button("π", "π", "btn_pi")
+
+        with tab3:
+            c1, c2, c3 = st.columns(3)
+            with c1: math_button("∫", "インテグラル", "btn_int")
+            with c2: math_button("∫定", "インテグラル(aからb)", "btn_dint")
+            with c3: math_button("Σ", "シグマ(k=1からn)", "btn_sum")
+            c4, c5, c6 = st.columns(3)
+            with c4: math_button("lim", "リミット(x→∞)", "btn_lim")
+            with c5: math_button("f'(x)", "f'(x)", "btn_diff")
+            with c6: math_button("∞", "∞", "btn_inf")
+
+        with tab4:
+            c1, c2 = st.columns(2)
+            with c1: math_button("vec", "ベクトルa", "btn_vec")
+            with c2: math_button("・", "・", "btn_dot")
+
 # --- 4. モードごとのプロンプト定義 ---
 
 base_instruction = """
 あなたは日本の高校数学教師です。数式は必ずLaTeX形式（$マーク）で書いてください。
-画像（手書きの数式や図形含む）が送られた場合、それを読み取り、数学的に解釈して応答してください。
+画像が送られた場合、その画像に書かれている数式や図形を読み取り、質問に答えてください。
+
+【生徒の入力についての重要ルール】
+生徒はLaTeXを使わず、「x^2」「ルート3」「インテグラル」などの直感的な表記で数式を入力します。
+あなたはそれらを文脈から正しく数学的に解釈して応答してください。
+例：
+- "ルート(3)" -> $\sqrt{3}$
+- "インテグラル(0から1) x^2 dx" -> $\int_{0}^{1} x^2 dx$
+- "(1)/(2)" -> $\\frac{1}{2}$
 """
 
 if mode == "📖 学習モード":
@@ -305,96 +395,99 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                     response_placeholder.markdown(full_response)
             
             st.session_state.messages.append({"role": "model", "content": full_response})
+            
+            # AIが答えたらバッファをクリア
+            st.session_state["input_text_buffer"] = ""
             st.rerun()
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（手書き・画像・テキスト） ---
+# --- 8. 入力エリア（タブ切り替え式） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
-    uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
+    # キャンバス用キー
+    canvas_key = f"canvas_{st.session_state['canvas_key']}"
+    uploader_key = f"uploader_{st.session_state['uploader_key']}"
 
-    # カラム分けで「画像アップロード」と「手書き」を並べる
-    col_upload, col_canvas = st.columns(2)
-    
-    # 1. 画像アップロード
-    with col_upload:
-        with st.expander("📸 画像をアップロード", expanded=False):
-            uploaded_file = st.file_uploader("問題の写真をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
+    # 入力モードのタブ化
+    tab_text, tab_image, tab_hand = st.tabs(["⌨️ テキスト", "📸 画像", "📝 手書き"])
 
-    # 2. 手書き入力 (Canvas)
-    canvas_result = None
-    with col_canvas:
-        with st.expander("📝 手書き入力ボード", expanded=False):
-            # st_canvasで手書きエリアを作成
-            canvas_result = st_canvas(
-                fill_color="rgba(255, 165, 0, 0.3)",
-                stroke_width=3,
-                stroke_color="#000000",
-                background_color="#ffffff",
-                height=200,
-                width=300,
-                drawing_mode="freedraw",
-                key="canvas",
+    # --- タブ1: テキスト入力（数式ボタン対応） ---
+    with tab_text:
+        with st.form(key='text_form', clear_on_submit=True):
+            # バッファにある内容（数式ボタンで追加されたもの）を初期値にする
+            default_text = st.session_state.get("input_text_buffer", "")
+            
+            user_text = st.text_area(
+                "質問や回答を入力", 
+                value=default_text, 
+                height=100, 
+                placeholder="ここに質問を入力するか、サイドバーの数式ボタンを押してください"
             )
-            # 手書き送信ボタン
-            send_canvas = st.button("手書きを送信")
+            
+            submit_text = st.form_submit_button("送信", type="primary")
+            
+            if submit_text and user_text:
+                content = user_text
+                if mode == "⚔️ 演習モード":
+                    content = f"【生徒の解答】\n{user_text}\n\n※採点してください。正解なら解説のみを行ってください。"
+                
+                st.session_state.messages.append({"role": "user", "content": content})
+                st.session_state["input_text_buffer"] = "" # 送信したらバッファをクリア
+                st.rerun()
 
-    # 3. テキスト入力
-    placeholder_text = "質問を入力..."
-    if mode == "⚡ 解答確認モード":
-        placeholder_text = "解答を知りたい問題を入力（または画像を送信）"
-    elif mode == "⚔️ 演習モード":
-        placeholder_text = "解答を入力（例：(1) 5, (2) 10 ...）"
+    # --- タブ2: 画像アップロード ---
+    with tab_image:
+        img_file = st.file_uploader("画像をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
+        img_text = st.text_input("質問があれば入力（任意）", key="img_text_input")
+        
+        if st.button("画像で送信"):
+            if img_file:
+                image_data = Image.open(img_file)
+                content_to_save = {"image": image_data}
+                
+                text_part = img_text if img_text else "この画像の数学の問題を解いてください。"
+                if mode == "⚔️ 演習モード":
+                    text_part = f"【生徒の画像解答】\n{text_part}\n\n※採点してください。"
+                
+                content_to_save["text"] = text_part
+                
+                st.session_state.messages.append({"role": "user", "content": content_to_save})
+                st.session_state["uploader_key"] += 1 # リセット
+                st.rerun()
+            else:
+                st.warning("画像を選択してください。")
 
-    chat_input = st.chat_input(placeholder_text)
+    # --- タブ3: 手書き入力 ---
+    with tab_hand:
+        st.write("指やマウスで数式を書いてください")
+        # キャンバスの描画
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 165, 0, 0.3)",
+            stroke_width=3,
+            stroke_color="#000000",
+            background_color="#ffffff",
+            height=250,
+            width=400, # 幅を広めに
+            drawing_mode="freedraw",
+            key=canvas_key,
+        )
+        
+        if st.button("手書きを送信"):
+            if canvas_result.image_data is not None:
+                # 画像データ変換
+                img_data = canvas_result.image_data.astype('uint8')
+                pil_image = Image.fromarray(img_data, "RGBA")
+                background = Image.new("RGB", pil_image.size, (255, 255, 255))
+                background.paste(pil_image, mask=pil_image.split()[3])
+                
+                content_to_save = {
+                    "image": background,
+                    "text": "【生徒の手書き入力】\nこの手書きの数式・図形を読み取って回答してください。"
+                }
+                if mode == "⚔️ 演習モード":
+                    content_to_save["text"] = "【生徒の手書き解答】\nこの手書きを解答として採点してください。"
 
-    # --- 送信処理 ---
-    content_to_save = {}
-    should_submit = False
-
-    # A. チャット入力で送信された場合
-    if chat_input:
-        text_part = chat_input
-        if mode == "⚔️ 演習モード":
-            text_part = f"【生徒の解答】\n{chat_input}\n\n※採点してください。正解なら解説のみを行ってください。"
-        
-        content_to_save["text"] = text_part
-        
-        # 画像もあれば追加
-        if uploaded_file:
-            image_data = Image.open(uploaded_file)
-            content_to_save["image"] = image_data
-        
-        should_submit = True
-
-    # B. 手書きボタンで送信された場合
-    elif send_canvas and canvas_result is not None and canvas_result.image_data is not None:
-        # キャンバスのデータをPIL画像に変換
-        img_data = canvas_result.image_data.astype('uint8')
-        # RGBAからRGBへ（背景が透明だと黒くなるので、白背景と合成するのがベストだが、簡易的に変換）
-        # 数学AI用途ならRGBAのままでもGeminiは読めることが多いが、念のためRGB変換
-        pil_image = Image.fromarray(img_data, "RGBA")
-        
-        # 背景を白にする処理（透明部分を白に）
-        background = Image.new("RGB", pil_image.size, (255, 255, 255))
-        background.paste(pil_image, mask=pil_image.split()[3]) # alpha channel as mask
-        
-        content_to_save["image"] = background
-        content_to_save["text"] = "この手書きの数式・図形を読み取ってください。"
-        
-        if mode == "⚔️ 演習モード":
-            content_to_save["text"] = "【生徒の手書き解答】\nこの画像を解答として採点してください。"
-
-        should_submit = True
-
-    # 送信実行
-    if should_submit:
-        if "image" in content_to_save:
-            st.session_state.messages.append({"role": "user", "content": content_to_save})
-        else:
-            st.session_state.messages.append({"role": "user", "content": content_to_save["text"]})
-        
-        # アップローダーのリセット
-        st.session_state["uploader_key"] += 1
-        st.rerun()
+                st.session_state.messages.append({"role": "user", "content": content_to_save})
+                st.session_state["canvas_key"] += 1 # キャンバスリセット
+                st.rerun()
