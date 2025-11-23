@@ -1,13 +1,12 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
-import datetime # 日付取得用
 
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。ログ保存機能で復習もバッチリ！")
+st.caption("Gemini 2.5 Flash 搭載。問題数を指定して演習を進めよう！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -16,34 +15,6 @@ if "messages" not in st.session_state:
 # 画像アップローダーのリセット用キー
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
-
-# カウンター表示関数
-def render_counter(label, key, min_value=1, max_value=5, default=1):
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-    st.write(label)
-    col_minus, col_val, col_plus = st.columns([1, 2, 1])
-
-    with col_minus:
-        if st.button("➖", key=f"{key}_minus"):
-            if st.session_state[key] > min_value:
-                st.session_state[key] -= 1
-                st.rerun()
-
-    with col_val:
-        st.markdown(
-            f"<div style='text-align: center; font-weight: bold; font-size: 20px; padding-top: 5px;'>{st.session_state[key]} 問</div>",
-            unsafe_allow_html=True
-        )
-
-    with col_plus:
-        if st.button("➕", key=f"{key}_plus"):
-            if st.session_state[key] < max_value:
-                st.session_state[key] += 1
-                st.rerun()
-    
-    return st.session_state[key]
 
 # --- 3. サイドバー（設定＆モード選択） ---
 with st.sidebar:
@@ -77,8 +48,11 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        num_questions_learn = render_counter("類題の数", "num_learn")
         
+        # ★修正：標準の数値入力ボックスに戻しました
+        num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
+        
+        # 難易度調整ボタン
         st.caption("難易度を選んで出題")
         l_col1, l_col2, l_col3 = st.columns(3)
         
@@ -143,6 +117,7 @@ with st.sidebar:
         
         st.write("### 🆕 演習スタート")
         
+        # 単元選択メニュー
         math_curriculum = {
             "数学I": ["数と式", "集合と命題", "二次関数", "図形と計量", "データの分析"],
             "数学A": ["場合の数と確率", "図形の性質", "整数の性質"],
@@ -162,7 +137,8 @@ with st.sidebar:
             selected_topic = st.selectbox("単元を選択", math_curriculum[selected_subject])
             topic_for_prompt = f"{selected_subject}の{selected_topic}"
 
-        num_q_init = render_counter("初回の出題数", "q_init")
+        # ★修正：標準の数値入力ボックスに戻しました（初回用）
+        num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
         
         if st.button("問題を作成開始"):
             if not topic_for_prompt:
@@ -176,7 +152,8 @@ with st.sidebar:
         
         st.write("### ⏩ 次の問題へ")
         
-        num_q_next = render_counter("次に出す問題数", "q_next")
+        # ★修正：標準の数値入力ボックスに戻しました（2回目以降用）
+        num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
         
         st.caption("難易度を選んで次のセットへ")
         col_easy, col_same, col_hard = st.columns(3)
@@ -231,40 +208,6 @@ with st.sidebar:
     if st.button("🗑️ 会話をリセット", type="primary"):
         st.session_state.messages = []
         st.rerun()
-
-    # ★追加機能1：学習ログのダウンロード
-    st.write("### 📥 復習用")
-    log_text = ""
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    log_text += f"【数学AIチューター 学習ログ】\n日時: {current_time}\n\n"
-    
-    for m in st.session_state.messages:
-        role = "生徒" if m["role"] == "user" else "先生"
-        content = ""
-        if isinstance(m["content"], dict):
-            content = m["content"].get("text", "[画像]")
-        else:
-            content = m["content"]
-        log_text += f"[{role}]\n{content}\n\n{'-'*20}\n\n"
-        
-    st.download_button(
-        label="学習履歴を保存 (.txt)",
-        data=log_text,
-        file_name="math_study_log.txt",
-        mime="text/plain"
-    )
-
-    # ★追加機能2：数式入力ヘルプ（チートシート）
-    with st.expander("🧮 数式の書き方ヘルプ"):
-        st.markdown("""
-        数式は以下のように入力するとAIに伝わりやすいです。
-        - **分数**: `a/b` または `\\frac{a}{b}`
-        - **累乗**: `x^2`
-        - **ルート**: `\\sqrt{x}`
-        - **積分**: `\\int`
-        - **シグマ**: `\\sum`
-        - **ベクトル**: `\\vec{a}`
-        """)
 
 # --- 4. モードごとのプロンプト定義 ---
 
