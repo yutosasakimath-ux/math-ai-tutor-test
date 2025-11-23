@@ -6,7 +6,7 @@ from PIL import Image
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。直感的な操作で演習を進めよう！")
+st.caption("Gemini 2.5 Flash 搭載。カリキュラム選択と直感操作で演習！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -16,15 +16,12 @@ if "messages" not in st.session_state:
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
 
-# ★新機能：プラスマイナスカウンターを表示する関数
+# ★カウンター表示関数（プラスマイナスボタン）
 def render_counter(label, key, min_value=1, max_value=5, default=1):
-    # セッションステートの初期化
     if key not in st.session_state:
         st.session_state[key] = default
 
     st.write(label)
-    
-    # 3つのカラムを作る（[ - ] [ 数字 ] [ + ]）
     col_minus, col_val, col_plus = st.columns([1, 2, 1])
 
     with col_minus:
@@ -34,7 +31,6 @@ def render_counter(label, key, min_value=1, max_value=5, default=1):
                 st.rerun()
 
     with col_val:
-        # 真ん中に現在の数字を大きく表示
         st.markdown(
             f"<div style='text-align: center; font-weight: bold; font-size: 20px; padding-top: 5px;'>{st.session_state[key]} 問</div>",
             unsafe_allow_html=True
@@ -80,8 +76,7 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        
-        # ★修正：プラスマイナスカウンターを使用
+        # プラスマイナスカウンター
         num_questions_learn = render_counter("類題の数", "num_learn")
         
         st.caption("難易度を選んで出題")
@@ -142,26 +137,48 @@ with st.sidebar:
     elif mode == "⚡ 解答確認モード":
         st.warning("📸 解答が知りたい問題を入力（または画像をアップ）してください。即座に答えを提示します。")
     
-    # --- ■ 3. 演習モード ---
+    # --- ■ 3. 演習モード（ここを修正しました！） ---
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
         st.write("### 🆕 演習スタート")
-        topic = st.text_input("演習したい単元（例：二次関数）")
         
-        # ★修正：プラスマイナスカウンターを使用
+        # ★復活：カリキュラム選択メニュー
+        math_curriculum = {
+            "数学I": ["数と式", "集合と命題", "二次関数", "図形と計量", "データの分析"],
+            "数学A": ["場合の数と確率", "図形の性質", "整数の性質"],
+            "数学II": ["式と証明", "複素数と方程式", "図形と方程式", "三角関数", "指数・対数関数", "微分・積分"],
+            "数学B": ["数列", "統計的な推測"],
+            "数学III": ["極限", "微分法", "積分法"],
+            "数学C": ["ベクトル", "平面上の曲線と複素数平面"],
+            "手動入力": [] 
+        }
+        
+        selected_subject = st.selectbox("科目を選択", list(math_curriculum.keys()))
+        topic_for_prompt = ""
+        
+        if selected_subject == "手動入力":
+            topic_for_prompt = st.text_input("単元名を入力（例：合同式）")
+        else:
+            selected_topic = st.selectbox("単元を選択", math_curriculum[selected_subject])
+            topic_for_prompt = f"{selected_subject}の{selected_topic}"
+
+        # 初回の問題数（プラスマイナスボタン）
         num_q_init = render_counter("初回の出題数", "q_init")
         
         if st.button("問題を作成開始"):
-            prompt_text = f"【{topic}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
-            st.session_state.messages.append({"role": "user", "content": prompt_text})
-            st.rerun()
+            if not topic_for_prompt:
+                st.error("単元を選択してください。")
+            else:
+                prompt_text = f"【{topic_for_prompt}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
         
         st.markdown("---")
         
         st.write("### ⏩ 次の問題へ")
         
-        # ★修正：プラスマイナスカウンターを使用
+        # 2回目以降の問題数（プラスマイナスボタン）
         num_q_next = render_counter("次に出す問題数", "q_next")
         
         st.caption("難易度を選んで次のセットへ")
@@ -321,7 +338,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア ---
+# --- 8. 入力エリア（画像リセット機能付き） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
     uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
