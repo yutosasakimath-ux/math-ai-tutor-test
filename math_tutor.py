@@ -3,11 +3,17 @@ import google.generativeai as genai
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
+# --- 0. 状態リセット処理（ここが最重要！）---
+# 画面が描画される前に、入力モードのリセット予約があるかチェックします
+if "force_reset_to_text" in st.session_state and st.session_state["force_reset_to_text"]:
+    st.session_state["input_method_radio"] = "Text"  # 強制的にテキストモードに戻す
+    st.session_state["force_reset_to_text"] = False # 予約を解除
+
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。エラー修正済み・完全版！")
+st.caption("Gemini 2.5 Flash 搭載。送信すると自動でテキスト入力に戻ります！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -317,11 +323,12 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
     # キーを動的に変えて中身をリセットするための変数
-    form_key = f"form_{st.session_state['form_key_index']}"
-    uploader_key = f"uploader_{st.session_state['uploader_key']}"
-    canvas_key = f"canvas_{st.session_state['canvas_key']}"
+    current_key = st.session_state["form_key_index"]
+    uploader_key = f"uploader_{current_key}"
+    canvas_key = f"canvas_{current_key}"
 
     st.write("### 📝 入力方法を選択")
+    
     input_method = st.radio(
         "入力方法",
         ["Text", "Image", "Handwriting"],
@@ -331,24 +338,29 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
         key="input_method_radio"
     )
 
-    # --- A. テキスト入力 ---
+    # --- A. テキスト入力モード ---
     if input_method == "Text":
-        with st.form(key=form_key, clear_on_submit=True):
+        with st.form(key=f'text_form_{current_key}'):
             user_text = st.text_area("メッセージを入力", height=70, placeholder="質問や回答を入力してください")
-            submit_text = st.form_submit_button("送信", type="primary")
+            col1, col2 = st.columns([1, 6])
+            with col1:
+                submit_text = st.form_submit_button("送信", type="primary")
             
             if submit_text and user_text:
                 content = user_text
                 if mode == "⚔️ 演習モード":
                     content = f"【生徒の解答】\n{user_text}\n\n※採点してください。正解なら解説のみを行ってください。"
                 st.session_state.messages.append({"role": "user", "content": content})
+                
+                # ★修正：状態リセットを予約する（ここではまだ書き換えない）
                 st.session_state["form_key_index"] += 1
                 st.rerun()
 
-    # --- B. 画像アップロード ---
+    # --- B. 画像アップロードモード ---
     elif input_method == "Image":
-        img_file = st.file_uploader("画像をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
-        img_text = st.text_input("補足コメント（任意）", key="img_text_input")
+        st.info("👇 下のボタンから画像をアップロードしてください")
+        img_file = st.file_uploader("画像を選択", type=["jpg", "png", "jpeg"], key=uploader_key)
+        img_text = st.text_input("補足コメント（任意）", key=f"img_comment_{current_key}")
         
         if st.button("画像で送信", type="primary"):
             if img_file:
@@ -359,12 +371,15 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                 
                 content_to_save = {"image": image_data, "text": text_part}
                 st.session_state.messages.append({"role": "user", "content": content_to_save})
-                st.session_state["uploader_key"] += 1
+                
+                # ★修正：状態リセットを予約して、テキストモードへの強制リセットも予約
+                st.session_state["form_key_index"] += 1
+                st.session_state["force_reset_to_text"] = True
                 st.rerun()
             else:
                 st.warning("画像を選択してください。")
 
-    # --- C. 手書き入力 ---
+    # --- C. 手書き入力モード ---
     elif input_method == "Handwriting":
         st.write("👇 ここに指やマウスで数式を書いてください")
         canvas_result = st_canvas(
@@ -394,5 +409,8 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                     content_to_save["text"] = "【生徒の手書き解答】\nこの手書きを解答として採点してください。"
 
                 st.session_state.messages.append({"role": "user", "content": content_to_save})
-                st.session_state["canvas_key"] += 1
+                
+                # ★修正：状態リセットを予約して、テキストモードへの強制リセットも予約
+                st.session_state["form_key_index"] += 1
+                st.session_state["force_reset_to_text"] = True
                 st.rerun()
