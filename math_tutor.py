@@ -1,12 +1,13 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
+import datetime # 日付取得用
 
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。問題数を指定して演習を進めよう！")
+st.caption("Gemini 2.5 Flash 搭載。直感的な操作で演習を進めよう！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -48,8 +49,7 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        
-        # ★修正：標準の数値入力ボックスに戻しました
+        # 学習モード用の問題数
         num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
         # 難易度調整ボタン
@@ -115,44 +115,20 @@ with st.sidebar:
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
+        st.write("### 🔢 設定")
+        num_q_init = st.number_input("出題する問題数", min_value=1, max_value=5, value=1, key="q_init")
+        
         st.write("### 🆕 演習スタート")
-        
-        # 単元選択メニュー
-        math_curriculum = {
-            "数学I": ["数と式", "集合と命題", "二次関数", "図形と計量", "データの分析"],
-            "数学A": ["場合の数と確率", "図形の性質", "整数の性質"],
-            "数学II": ["式と証明", "複素数と方程式", "図形と方程式", "三角関数", "指数・対数関数", "微分・積分"],
-            "数学B": ["数列", "統計的な推測"],
-            "数学III": ["極限", "微分法", "積分法"],
-            "数学C": ["ベクトル", "平面上の曲線と複素数平面"],
-            "手動入力": [] 
-        }
-        
-        selected_subject = st.selectbox("科目を選択", list(math_curriculum.keys()))
-        topic_for_prompt = ""
-        
-        if selected_subject == "手動入力":
-            topic_for_prompt = st.text_input("単元名を入力（例：合同式）")
-        else:
-            selected_topic = st.selectbox("単元を選択", math_curriculum[selected_subject])
-            topic_for_prompt = f"{selected_subject}の{selected_topic}"
-
-        # ★修正：標準の数値入力ボックスに戻しました（初回用）
-        num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
+        topic = st.text_input("演習したい単元（例：二次関数）")
         
         if st.button("問題を作成開始"):
-            if not topic_for_prompt:
-                st.error("単元を選択してください。")
-            else:
-                prompt_text = f"【{topic_for_prompt}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
-                st.session_state.messages.append({"role": "user", "content": prompt_text})
-                st.rerun()
+            prompt_text = f"【{topic}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
+            st.session_state.messages.append({"role": "user", "content": prompt_text})
+            st.rerun()
         
         st.markdown("---")
         
         st.write("### ⏩ 次の問題へ")
-        
-        # ★修正：標準の数値入力ボックスに戻しました（2回目以降用）
         num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
         
         st.caption("難易度を選んで次のセットへ")
@@ -208,6 +184,46 @@ with st.sidebar:
     if st.button("🗑️ 会話をリセット", type="primary"):
         st.session_state.messages = []
         st.rerun()
+
+    # ★★★ 追加機能：数式入力サポート＆ログ保存 ★★★
+    st.markdown("---")
+    
+    # 1. 数式入力ヘルプ（アコーディオン形式）
+    with st.expander("🧮 数式の書き方ヘルプ"):
+        st.markdown("""
+        AIに数式を伝えるときは、以下のように書くとスムーズです。
+        
+        | 記号 | 書き方 | 例 |
+        |---|---|---|
+        | 分数 | `a/b` | 1/2 |
+        | 累乗 | `x^2` | x^2 |
+        | ルート | `\sqrt{x}` | \sqrt{2} |
+        | かける | `*` または `\times` | 2 * 3 |
+        | わる | `/` または `\div` | 6 / 2 |
+        | パイ | `\pi` | 2\pi r |
+        | 積分 | `\int` | \int x dx |
+        """)
+
+    # 2. 学習ログのダウンロード
+    log_text = ""
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    log_text += f"【数学AIチューター 学習ログ】\n日時: {current_time}\n\n"
+    
+    for m in st.session_state.messages:
+        role = "生徒" if m["role"] == "user" else "先生"
+        content = ""
+        if isinstance(m["content"], dict):
+            content = m["content"].get("text", "[画像]")
+        else:
+            content = m["content"]
+        log_text += f"[{role}]\n{content}\n\n{'-'*20}\n\n"
+        
+    st.download_button(
+        label="📥 学習履歴を保存 (.txt)",
+        data=log_text,
+        file_name="math_study_log.txt",
+        mime="text/plain"
+    )
 
 # --- 4. モードごとのプロンプト定義 ---
 
