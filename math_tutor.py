@@ -459,25 +459,31 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                 st.warning("画像を選択してください。")
 
     # --- タブ3: 手書き入力 ---
+    # --- タブ3: 手書き入力 ---
     with tab_hand:
-        st.write("指やマウスで数式を書いてください")
-        # キャンバスの描画
+        st.write("👇 ここに指やマウスで数式を書いてください")
+        
+        # ★修正点：st.expander を削除し、タブ直下にキャンバスを配置しました
         canvas_result = st_canvas(
             fill_color="rgba(255, 165, 0, 0.3)",
             stroke_width=3,
             stroke_color="#000000",
-            background_color="#ffffff",
-            height=250,
-            width=400, # 幅を広めに
+            background_color="#ffffff", # 背景を白に固定
+            height=300,  # 高さを少し大きくしました
+            width=500,   # 幅も少し大きくしました
             drawing_mode="freedraw",
             key=canvas_key,
+            display_toolbar=True, # ツールバー（消しゴムなど）を表示して使いやすく
         )
         
-        if st.button("手書きを送信"):
+        # キャンバスの下に送信ボタンを配置
+        if st.button("手書きを送信", type="primary"):
             if canvas_result.image_data is not None:
                 # 画像データ変換
                 img_data = canvas_result.image_data.astype('uint8')
                 pil_image = Image.fromarray(img_data, "RGBA")
+                
+                # 背景を白にする処理
                 background = Image.new("RGB", pil_image.size, (255, 255, 255))
                 background.paste(pil_image, mask=pil_image.split()[3])
                 
@@ -489,5 +495,7 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                     content_to_save["text"] = "【生徒の手書き解答】\nこの手書きを解答として採点してください。"
 
                 st.session_state.messages.append({"role": "user", "content": content_to_save})
-                st.session_state["canvas_key"] += 1 # キャンバスリセット
+                
+                # 送信後にキャンバスをリセットするためにキーを更新
+                st.session_state["canvas_key"] = int(st.session_state["canvas_key"]) + 1
                 st.rerun()
