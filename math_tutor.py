@@ -1,7 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
-import datetime # 日付取得用
 
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
@@ -119,12 +118,34 @@ with st.sidebar:
         num_q_init = st.number_input("出題する問題数", min_value=1, max_value=5, value=1, key="q_init")
         
         st.write("### 🆕 演習スタート")
-        topic = st.text_input("演習したい単元（例：二次関数）")
         
+        # 単元選択メニュー
+        math_curriculum = {
+            "数学I": ["数と式", "集合と命題", "二次関数", "図形と計量", "データの分析"],
+            "数学A": ["場合の数と確率", "図形の性質", "整数の性質"],
+            "数学II": ["式と証明", "複素数と方程式", "図形と方程式", "三角関数", "指数・対数関数", "微分・積分"],
+            "数学B": ["数列", "統計的な推測"],
+            "数学III": ["極限", "微分法", "積分法"],
+            "数学C": ["ベクトル", "平面上の曲線と複素数平面"],
+            "手動入力": [] 
+        }
+        
+        selected_subject = st.selectbox("科目を選択", list(math_curriculum.keys()))
+        topic_for_prompt = ""
+        
+        if selected_subject == "手動入力":
+            topic_for_prompt = st.text_input("単元名を入力（例：合同式）")
+        else:
+            selected_topic = st.selectbox("単元を選択", math_curriculum[selected_subject])
+            topic_for_prompt = f"{selected_subject}の{selected_topic}"
+
         if st.button("問題を作成開始"):
-            prompt_text = f"【{topic}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
-            st.session_state.messages.append({"role": "user", "content": prompt_text})
-            st.rerun()
+            if not topic_for_prompt:
+                st.error("単元を選択してください。")
+            else:
+                prompt_text = f"【{topic_for_prompt}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
         
         st.markdown("---")
         
@@ -185,10 +206,9 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-    # ★★★ 追加機能：数式入力サポート＆ログ保存 ★★★
     st.markdown("---")
     
-    # 1. 数式入力ヘルプ（アコーディオン形式）
+    # ★学習履歴保存機能を削除し、数式ヘルプのみ残しました
     with st.expander("🧮 数式の書き方ヘルプ"):
         st.markdown("""
         AIに数式を伝えるときは、以下のように書くとスムーズです。
@@ -203,27 +223,6 @@ with st.sidebar:
         | パイ | `\pi` | 2\pi r |
         | 積分 | `\int` | \int x dx |
         """)
-
-    # 2. 学習ログのダウンロード
-    log_text = ""
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    log_text += f"【数学AIチューター 学習ログ】\n日時: {current_time}\n\n"
-    
-    for m in st.session_state.messages:
-        role = "生徒" if m["role"] == "user" else "先生"
-        content = ""
-        if isinstance(m["content"], dict):
-            content = m["content"].get("text", "[画像]")
-        else:
-            content = m["content"]
-        log_text += f"[{role}]\n{content}\n\n{'-'*20}\n\n"
-        
-    st.download_button(
-        label="📥 学習履歴を保存 (.txt)",
-        data=log_text,
-        file_name="math_study_log.txt",
-        mime="text/plain"
-    )
 
 # --- 4. モードごとのプロンプト定義 ---
 
