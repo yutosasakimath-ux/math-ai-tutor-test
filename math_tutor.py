@@ -7,7 +7,7 @@ from streamlit_drawable_canvas import st_canvas
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。手書きも画像もスムーズに入力！")
+st.caption("Gemini 2.5 Flash 搭載。手書き・画像・テキストで自由に入力！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -51,8 +51,6 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        
-        # ★数値入力ボックス (st.number_input)
         num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
         st.caption("難易度を選んで出題")
@@ -117,7 +115,6 @@ with st.sidebar:
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
-        # ★数値入力ボックス (st.number_input)
         st.write("### 🔢 設定")
         num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
         
@@ -153,8 +150,6 @@ with st.sidebar:
         st.markdown("---")
         
         st.write("### ⏩ 次の問題へ")
-        
-        # ★数値入力ボックス (st.number_input)
         num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
         
         st.caption("難易度を選んで次のセットへ")
@@ -215,7 +210,7 @@ with st.sidebar:
 
 base_instruction = """
 あなたは日本の高校数学教師です。数式は必ずLaTeX形式（$マーク）で書いてください。
-画像や手書き入力が送られた場合、それを読み取り、数学的に解釈して応答してください。
+画像が送られた場合、その画像に書かれている数式や図形を読み取り、質問に答えてください。
 """
 
 if mode == "📖 学習モード":
@@ -314,26 +309,25 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（完全分離版） ---
+# --- 8. 入力エリア（修正版：モードごとに分岐） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
-    # 各種キー
     uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
     canvas_key = f"canvas_{st.session_state['canvas_key']}"
 
-    # 入力方法の選択（ラジオボタン）
+    # 入力方法の選択（★ここを修正：文字化け防止のためシンプルなキーを使用）
     st.write("### 📝 入力方法を選択")
     input_method = st.radio(
         "入力方法",
-        ["⌨️ テキスト・数式", "📸 画像アップロード", "✍️ 手書き入力"],
+        ["Text", "Image", "Handwriting"],
+        format_func=lambda x: "⌨️ テキスト" if x == "Text" else ("📸 画像" if x == "Image" else "✍️ 手書き"),
         horizontal=True,
         label_visibility="collapsed",
-        key="input_mode"
+        key="input_method_radio" # キーを設定して状態を保持
     )
 
     # --- A. テキスト入力モード ---
-    # ★重要：テキストモードの時だけ chat_input を表示する
-    if input_method == "⌨️ テキスト・数式":
+    if input_method == "Text":
         placeholder_text = "質問を入力..."
         if mode == "⚡ 解答確認モード":
             placeholder_text = "解答を知りたい問題を入力"
@@ -348,9 +342,9 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
             st.rerun()
 
     # --- B. 画像アップロードモード ---
-    # ★重要：画像モードの時は chat_input を消し、アップローダーだけ出す
-    elif input_method == "📸 画像アップロード":
-        img_file = st.file_uploader("画像をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
+    elif input_method == "Image":
+        st.write("👇 問題の写真をアップロード")
+        img_file = st.file_uploader("画像を選択", type=["jpg", "png", "jpeg"], key=uploader_key, label_visibility="collapsed")
         img_text = st.text_input("補足コメント（任意）", key="img_text_input")
         
         if st.button("画像で送信", type="primary"):
@@ -368,8 +362,7 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                 st.warning("画像を選択してください。")
 
     # --- C. 手書き入力モード ---
-    # ★重要：手書きモードの時は chat_input を消し、キャンバスだけ出す
-    elif input_method == "✍️ 手書き入力":
+    elif input_method == "Handwriting":
         st.write("👇 ここに指やマウスで数式を書いてください")
         canvas_result = st_canvas(
             fill_color="rgba(255, 165, 0, 0.3)",
