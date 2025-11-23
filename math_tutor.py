@@ -7,7 +7,7 @@ from streamlit_drawable_canvas import st_canvas
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。手書きも画像もテキストもOK！")
+st.caption("Gemini 2.5 Flash 搭載。シンプルで使いやすい演習アプリ！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -18,15 +18,6 @@ if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
 if "canvas_key" not in st.session_state:
     st.session_state["canvas_key"] = 0
-
-# 入力バッファ（数式ボタン用）
-if "input_text_buffer" not in st.session_state:
-    st.session_state["input_text_buffer"] = ""
-
-# 数式ボタン関数
-def math_button(label, insert_text, key):
-    if st.button(label, key=key):
-        st.session_state["input_text_buffer"] = st.session_state.get("input_text_buffer", "") + insert_text + " "
 
 # --- 3. サイドバー（設定＆モード選択） ---
 with st.sidebar:
@@ -61,7 +52,7 @@ with st.sidebar:
         
         st.write("### 🔄 類題演習")
         
-        # ★修正：数値入力ボックス(st.number_input)に戻しました
+        # ★数値入力ボックス (st.number_input)
         num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
         st.caption("難易度を選んで出題")
@@ -126,7 +117,7 @@ with st.sidebar:
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
-        # ★修正：数値入力ボックス(st.number_input)に戻しました
+        # ★数値入力ボックス (st.number_input)
         st.write("### 🔢 設定")
         num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
         
@@ -163,7 +154,7 @@ with st.sidebar:
         
         st.write("### ⏩ 次の問題へ")
         
-        # ★修正：数値入力ボックス(st.number_input)に戻しました
+        # ★数値入力ボックス (st.number_input)
         num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
         
         st.caption("難易度を選んで次のセットへ")
@@ -220,55 +211,13 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-    # 数式パレット
-    st.markdown("---")
-    with st.expander("🧮 数式ボタン（タップで追加）", expanded=False):
-        tab1, tab2, tab3, tab4 = st.tabs(["基本", "関数", "微積", "ベクトル"])
-        
-        with tab1:
-            c1, c2, c3 = st.columns(3)
-            with c1: math_button("分数", "(分子)/(分母)", "btn_frac")
-            with c2: math_button("√", "ルート()", "btn_sqrt")
-            with c3: math_button("^2", "^2", "btn_sq")
-            c4, c5, c6 = st.columns(3)
-            with c4: math_button("≠", "≠", "btn_neq")
-            with c5: math_button("≦", "≦", "btn_leq")
-            with c6: math_button("≧", "≧", "btn_geq")
-
-        with tab2:
-            c1, c2, c3 = st.columns(3)
-            with c1: math_button("sin", "sin(θ)", "btn_sin")
-            with c2: math_button("cos", "cos(θ)", "btn_cos")
-            with c3: math_button("tan", "tan(θ)", "btn_tan")
-            c4, c5, c6 = st.columns(3)
-            with c4: math_button("log", "log_a(x)", "btn_log")
-            with c5: math_button("|x|", "|x|", "btn_abs")
-            with c6: math_button("π", "π", "btn_pi")
-
-        with tab3:
-            c1, c2, c3 = st.columns(3)
-            with c1: math_button("∫", "インテグラル", "btn_int")
-            with c2: math_button("∫定", "インテグラル(aからb)", "btn_dint")
-            with c3: math_button("Σ", "シグマ(k=1からn)", "btn_sum")
-            c4, c5, c6 = st.columns(3)
-            with c4: math_button("lim", "リミット(x→∞)", "btn_lim")
-            with c5: math_button("f'(x)", "f'(x)", "btn_diff")
-            with c6: math_button("∞", "∞", "btn_inf")
-
-        with tab4:
-            c1, c2 = st.columns(2)
-            with c1: math_button("vec", "ベクトルa", "btn_vec")
-            with c2: math_button("・", "・", "btn_dot")
+    # ※数式ヘルプは削除しました
 
 # --- 4. モードごとのプロンプト定義 ---
 
 base_instruction = """
 あなたは日本の高校数学教師です。数式は必ずLaTeX形式（$マーク）で書いてください。
 画像が送られた場合、その画像に書かれている数式や図形を読み取り、質問に答えてください。
-
-【生徒の入力についての重要ルール】
-生徒はLaTeXを使わず、「x^2」「ルート3」「インテグラル」などの直感的な表記で数式を入力します。
-あなたはそれらを文脈から正しく数学的に解釈して応答してください。
 """
 
 if mode == "📖 学習モード":
@@ -363,20 +312,17 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                     response_placeholder.markdown(full_response)
             
             st.session_state.messages.append({"role": "model", "content": full_response})
-            
-            # AIが答えたらバッファをクリア
-            st.session_state["input_text_buffer"] = ""
             st.rerun()
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（修正版：ラジオボタン切り替え） ---
+# --- 8. 入力エリア（入力モード切替・手書き・画像） ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
     uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
     canvas_key = f"canvas_{st.session_state['canvas_key']}"
 
-    # 入力方法をラジオボタンで切り替え（タブによるバグ回避のため）
+    # 入力方法の選択
     st.write("### 📝 入力方法を選択")
     input_method = st.radio(
         "入力方法",
@@ -388,10 +334,8 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
     # --- A. テキスト入力モード ---
     if input_method == "⌨️ テキスト・数式":
         with st.form(key='text_form', clear_on_submit=True):
-            default_text = st.session_state.get("input_text_buffer", "")
             user_text = st.text_area(
                 "メッセージを入力", 
-                value=default_text, 
                 height=100, 
                 placeholder="質問や回答を入力してください"
             )
@@ -402,7 +346,6 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                 if mode == "⚔️ 演習モード":
                     content = f"【生徒の解答】\n{user_text}\n\n※採点してください。正解なら解説のみを行ってください。"
                 st.session_state.messages.append({"role": "user", "content": content})
-                st.session_state["input_text_buffer"] = "" 
                 st.rerun()
 
     # --- B. 画像アップロードモード ---
@@ -426,7 +369,7 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
 
     # --- C. 手書き入力モード ---
     elif input_method == "✍️ 手書き入力":
-        st.caption("黒い枠の中に指やマウスで数式を書いてください")
+        st.write("👇 ここに指やマウスで数式を書いてください")
         canvas_result = st_canvas(
             fill_color="rgba(255, 165, 0, 0.3)",
             stroke_width=3,
