@@ -52,7 +52,7 @@ with st.sidebar:
         
         st.write("### 🔄 類題演習")
         
-        # ★数値入力ボックス (st.number_input)
+        # 数値入力ボックス
         num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
         st.caption("難易度を選んで出題")
@@ -117,7 +117,6 @@ with st.sidebar:
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
-        # ★数値入力ボックス (st.number_input)
         st.write("### 🔢 設定")
         num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
         
@@ -154,7 +153,6 @@ with st.sidebar:
         
         st.write("### ⏩ 次の問題へ")
         
-        # ★数値入力ボックス (st.number_input)
         num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
         
         st.caption("難易度を選んで次のセットへ")
@@ -211,13 +209,15 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-    # ※数式ヘルプは削除しました
-
 # --- 4. モードごとのプロンプト定義 ---
 
 base_instruction = """
 あなたは日本の高校数学教師です。数式は必ずLaTeX形式（$マーク）で書いてください。
 画像が送られた場合、その画像に書かれている数式や図形を読み取り、質問に答えてください。
+
+【生徒の入力についての重要ルール】
+生徒はLaTeXを使わず、「x^2」「ルート3」「インテグラル」などの直感的な表記で数式を入力します。
+あなたはそれらを文脈から正しく数学的に解釈して応答してください。
 """
 
 if mode == "📖 学習モード":
@@ -316,7 +316,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（入力モード切替・手書き・画像） ---
+# --- 8. 入力エリア ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
     uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
@@ -324,29 +324,25 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
 
     # 入力方法の選択
     st.write("### 📝 入力方法を選択")
+    
+    # ★修正点：key="input_mode" を追加して、選択状態を保持するようにしました
     input_method = st.radio(
         "入力方法",
         ["⌨️ テキスト・数式", "📸 画像アップロード", "✍️ 手書き入力"],
         horizontal=True,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="input_mode" # これで勝手にリセットされなくなります
     )
 
     # --- A. テキスト入力モード ---
     if input_method == "⌨️ テキスト・数式":
-        with st.form(key='text_form', clear_on_submit=True):
-            user_text = st.text_area(
-                "メッセージを入力", 
-                height=100, 
-                placeholder="質問や回答を入力してください"
-            )
-            submit_text = st.form_submit_button("送信", type="primary")
-            
-            if submit_text and user_text:
-                content = user_text
-                if mode == "⚔️ 演習モード":
-                    content = f"【生徒の解答】\n{user_text}\n\n※採点してください。正解なら解説のみを行ってください。"
-                st.session_state.messages.append({"role": "user", "content": content})
-                st.rerun()
+        # 標準のchat_inputに戻しました（シンプル化）
+        if prompt := st.chat_input("質問や回答を入力してください"):
+            content = prompt
+            if mode == "⚔️ 演習モード":
+                content = f"【生徒の解答】\n{prompt}\n\n※採点してください。正解なら解説のみを行ってください。"
+            st.session_state.messages.append({"role": "user", "content": content})
+            st.rerun()
 
     # --- B. 画像アップロードモード ---
     elif input_method == "📸 画像アップロード":
