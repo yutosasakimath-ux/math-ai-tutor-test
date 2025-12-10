@@ -1,5 +1,7 @@
 import streamlit as st
-
+import google.generativeai as genai
+from PIL import Image
+from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 🔐 認証設定（毎月ここを書き換えます）
 # ==========================================
@@ -35,10 +37,6 @@ if not st.session_state['is_logged_in']:
     login_screen()
     st.stop()  # これより下のコードは実行されない
 
-import streamlit as st
-import google.generativeai as genai
-from PIL import Image
-from streamlit_drawable_canvas import st_canvas
 
 # --- 0. 状態リセット処理（ここが最重要！）---
 # 画面が描画される前に、入力モードのリセット予約があるかチェックします
