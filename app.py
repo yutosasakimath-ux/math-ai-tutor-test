@@ -6,7 +6,6 @@ from PIL import Image
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
 # --- ビジネスモデルBの肝: 「誰が」勉強しているか ---
-# ここで個人の学習ログを特定します（将来的にDB連携・レポート送信に使います）
 if "student_name" not in st.session_state:
     st.session_state.student_name = "ゲスト"
 
@@ -27,7 +26,7 @@ if "form_key_index" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ 設定")
     
-    # 生徒情報の入力（レポート機能への布石）
+    # 生徒情報の入力
     st.session_state.student_name = st.text_input("あなたのお名前", value=st.session_state.student_name)
     
     # APIキー設定
@@ -43,8 +42,15 @@ with st.sidebar:
         if input_key: api_key = input_key.strip()
     
     st.markdown("---")
+
+    # ★★★ エラー対策：モデル名のカスタマイズ機能 ★★★
+    with st.expander("🔧 詳細設定（モデル変更）"):
+        st.caption("エラーが出る場合はモデル名を変更してください。\n例: gemini-pro, gemini-1.5-flash-latest")
+        # デフォルトを少し汎用的なものに変更
+        target_model_name = st.text_input("使用モデル名", value="gemini-1.5-flash")
+
+    st.markdown("---")
     
-    # モードは「学習（ソクラテス）」に一本化し、シンプルに
     st.info(f"ようこそ、{st.session_state.student_name}さん。\n今日も一緒に頑張りましょう！")
 
     st.markdown("---")
@@ -55,7 +61,6 @@ with st.sidebar:
         st.rerun()
 
 # --- 4. プロンプト定義（ソクラテス式・教育特化） ---
-# ここがあなたのビジネスの「商品価値（USP）」です。
 system_instruction = f"""
 あなたはプロの数学家庭教師です。相手は高校生の「{st.session_state.student_name}」さんです。
 以下のルールを厳格に守ってください。
@@ -72,11 +77,10 @@ system_instruction = f"""
 """
 
 # --- 5. モデルのセットアップ ---
+model = None
 if api_key:
     genai.configure(api_key=api_key)
     try:
-        # 無料枠ならflash、精度重視ならproに変更可能
-        target_model_name = "gemini-1.5-flash" 
         model = genai.GenerativeModel(target_model_name, system_instruction=system_instruction)
     except Exception as e:
         st.error(f"モデル設定エラー: {e}")
@@ -96,7 +100,9 @@ for message in st.session_state.messages:
 
 # --- 7. AI応答ロジック ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    if not api_key: st.stop()
+    if not api_key:
+        st.warning("左のサイドバーでAPIキーを設定してください。")
+        st.stop()
     
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
@@ -113,40 +119,48 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                         text_content = str(m["content"])
                     history_for_ai.append({"role": m["role"], "parts": [text_content]})
 
-            chat = model.start_chat(history=history_for_ai)
-            
-            # 最新メッセージの処理
-            current_msg = st.session_state.messages[-1]["content"]
-            content_to_send = []
-            
-            if isinstance(current_msg, dict):
-                if "text" in current_msg: content_to_send.append(current_msg["text"])
-                if "image" in current_msg: content_to_send.append(current_msg["image"])
+            # チャット開始（エラーハンドリング強化）
+            if model:
+                chat = model.start_chat(history=history_for_ai)
+                
+                # 最新メッセージの処理
+                current_msg = st.session_state.messages[-1]["content"]
+                content_to_send = []
+                
+                if isinstance(current_msg, dict):
+                    if "text" in current_msg: content_to_send.append(current_msg["text"])
+                    if "image" in current_msg: content_to_send.append(current_msg["image"])
+                else:
+                    content_to_send.append(current_msg)
+
+                # ストリーミング応答
+                response = chat.send_message(content_to_send, stream=True)
+                
+                for chunk in response:
+                    if chunk.text:
+                        full_response += chunk.text
+                        response_placeholder.markdown(full_response)
+                
+                st.session_state.messages.append({"role": "model", "content": full_response})
+                st.rerun() # 状態更新のためリロード
             else:
-                content_to_send.append(current_msg)
+                 st.error("モデルの初期化に失敗しています。モデル名を確認してください。")
 
-            # ストリーミング応答
-            response = chat.send_message(content_to_send, stream=True)
-            
-            for chunk in response:
-                if chunk.text:
-                    full_response += chunk.text
-                    response_placeholder.markdown(full_response)
-            
-            st.session_state.messages.append({"role": "model", "content": full_response})
-            st.rerun() # 状態更新のためリロード
         except Exception as e:
-            st.error(f"エラー: {e}")
+            # エラーメッセージを分かりやすく表示
+            error_msg = str(e)
+            if "404" in error_msg:
+                st.error(f"⚠️ エラー: モデル「{target_model_name}」が見つかりません。\nサイドバーの「詳細設定」からモデル名を変更してみてください。\n（試せる候補: gemini-1.5-flash-latest, gemini-pro, gemini-1.5-flash-001）")
+            else:
+                st.error(f"エラーが発生しました: {e}")
 
-# --- 8. 入力エリア（シンプル化） ---
+# --- 8. 入力エリア ---
 # ユーザーの発言待ち状態のときだけ表示
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
-    # フォームのリセット用キー
     current_key = st.session_state["form_key_index"]
     uploader_key = f"uploader_{current_key}"
 
-    # 入力モード切替（テキスト or 画像 のみ）
     input_type = st.radio("入力モード", ["⌨️ テキストで質問", "📸 画像で質問"], horizontal=True, label_visibility="collapsed")
 
     if input_type == "⌨️ テキストで質問":
