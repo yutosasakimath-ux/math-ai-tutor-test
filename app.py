@@ -44,7 +44,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # ★★★ 接続診断ボタン（エラー時の救世主） ★★★
+    # ★★★ 接続診断ボタン ★★★
     with st.expander("🛠️ トラブルシューティング"):
         if st.button("🔑 接続テスト・利用可能モデル確認"):
             if not api_key:
@@ -143,13 +143,14 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         else:
             content_to_send.append(current_msg)
 
-        # ★★★ 自己修復型リトライロジック ★★★
-        # 1. まずは優先リストで試す
+        # ★★★ 戦略的モデル優先順位 ★★★
+        # あなたのアカウントで使えるモデルの中から、
+        # 「賢さ」と「コスト」のバランスが良い順に並べています。
         PRIORITY_MODELS = [
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-            "gemini-pro"
+            "gemini-2.5-flash",       # 第1候補: 最新・高速・高コスパ（本命）
+            "gemini-2.0-flash",       # 第2候補: 安定のバックアップ
+            "gemini-2.5-pro",         # 第3候補: 超高性能だがコスト高め（切り札）
+            "gemini-2.0-flash-lite"   # 第4候補: 超低コスト（緊急用）
         ]
         
         success = False
@@ -162,25 +163,30 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             return chat.send_message(content_to_send, stream=True)
 
         # A. 優先リストでトライ
+        active_model = None
         for model_name in PRIORITY_MODELS:
             try:
+                # ユーザーの発言に対してレスポンス生成を試みる
+                # (モデル初期化だけでなく、実際にsend_messageしてエラーが出ないか確認)
                 response = try_generate(model_name)
+                
+                # 成功したらストリーミング開始
                 for chunk in response:
                     if chunk.text:
                         full_response += chunk.text
                         response_placeholder.markdown(full_response)
+                
                 success = True
+                active_model = model_name
                 break
             except Exception:
+                # このモデルがダメなら次へ
                 continue
         
         # B. 優先リストが全滅した場合、サーバーから「本当に使えるリスト」を取得して再トライ（自己修復）
         if not success:
             try:
-                # ユーザーのAPIキーで使えるモデルを動的に取得
                 fetched_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                
-                # 取得したモデルで片っ端から試す
                 for model_name in fetched_models:
                     try:
                         response = try_generate(model_name)
@@ -189,16 +195,18 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                                 full_response += chunk.text
                                 response_placeholder.markdown(full_response)
                         success = True
-                        break # 成功したら抜ける
+                        active_model = model_name
+                        break
                     except Exception as e:
                         last_error = e
                         continue
             except Exception as e:
-                # そもそもリスト取得すら失敗した場合（APIキー無効など）
                 last_error = e
 
         if success:
             st.session_state.messages.append({"role": "model", "content": full_response})
+            # デバッグ用に実際に使われたモデルをログ出力（本番では消してもOK）
+            print(f"Used Model: {active_model}")
             st.rerun()
         else:
             st.error("❌ エラー: AIシステムに接続できませんでした。")
