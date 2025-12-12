@@ -22,7 +22,7 @@ if "uploader_key" not in st.session_state:
 if "form_key_index" not in st.session_state:
     st.session_state["form_key_index"] = 0
 
-# --- 3. サイドバー（設定） ---
+# --- 3. サイドバー（設定・診断） ---
 with st.sidebar:
     st.header("⚙️ 設定")
     
@@ -34,17 +34,44 @@ with st.sidebar:
     try:
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ 認証済み")
+            st.success("✅ 認証済み (Secrets)")
     except:
         pass
+    
     if not api_key:
         input_key = st.text_input("Gemini APIキー", type="password")
         if input_key: api_key = input_key.strip()
     
     st.markdown("---")
     
-    # ★ 変更点: モデル選択UIを削除し、内部完結させました。
-    # ユーザーには余計な設定を見せず、学習に集中させます。
+    # ★★★ 接続診断ボタン（エラー時の救世主） ★★★
+    with st.expander("🛠️ トラブルシューティング"):
+        if st.button("🔑 接続テスト・利用可能モデル確認"):
+            if not api_key:
+                st.error("まずはAPIキーを入力してください。")
+            else:
+                try:
+                    genai.configure(api_key=api_key)
+                    st.write("Googleへの接続を試みています...")
+                    
+                    # 利用可能なモデル一覧を取得
+                    available_models = []
+                    for m in genai.list_models():
+                        if 'generateContent' in m.supported_generation_methods:
+                            available_models.append(m.name)
+                    
+                    if available_models:
+                        st.success(f"✅ 接続成功！利用可能なモデルが見つかりました ({len(available_models)}個)")
+                        st.code("\n".join(available_models))
+                        st.info("このリストにあるモデルを自動的に使用します。")
+                    else:
+                        st.warning("⚠️ 接続できましたが、チャットに使用できるモデルが見つかりませんでした。APIキーの種類（Vertex AI用など）を確認してください。")
+                        
+                except Exception as e:
+                    st.error(f"❌ 接続失敗: {e}")
+                    st.caption("APIキーが間違っているか、Google AI StudioでAPIが無効になっている可能性があります。")
+
+    st.markdown("---")
     
     st.info(f"ようこそ、{st.session_state.student_name}さん。\n今日も一緒に頑張りましょう！")
 
@@ -71,34 +98,7 @@ system_instruction = f"""
 - 画像内の問題を読み取り、いきなり解答を書くのではなく、「この問題のどの方針で迷ってる？」とヒントを出してください。
 """
 
-# --- 5. モデルのセットアップ（自動フォールバック機能付き） ---
-model = None
-
-# 使用するモデルの候補リスト（優先順）
-# エラーが出た場合、ここにある順に自動で試していきます
-CANDIDATE_MODELS = [
-    "gemini-1.5-flash-latest", # 最新のFlash
-    "gemini-1.5-flash-001",    # バージョン指定Flash
-    "gemini-1.5-flash",        # 通常Flash
-    "gemini-pro"               # 最後の手段（Pro）
-]
-
-if api_key:
-    genai.configure(api_key=api_key)
-    
-    # 有効なモデルを自動で探すロジック
-    active_model_name = None
-    
-    # モデルのインスタンス化を試みる
-    # 注: 実際にAPIを叩くまでエラーが出ないこともあるため、ここでは設定のみ行う
-    # とりあえず第一候補を採用し、エラー時にリトライする戦略をとります
-    active_model_name = CANDIDATE_MODELS[0]
-    try:
-        model = genai.GenerativeModel(active_model_name, system_instruction=system_instruction)
-    except Exception as e:
-        st.error(f"モデル設定エラー: {e}")
-
-# --- 6. チャット表示エリア ---
+# --- 5. チャット表示エリア ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         content = message["content"]
@@ -110,12 +110,15 @@ for message in st.session_state.messages:
         else:
             st.markdown(content)
 
-# --- 7. AI応答ロジック（自動再試行機能付き） ---
+# --- 6. AI応答ロジック（自己修復機能付き） ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     if not api_key:
         st.warning("左のサイドバーでAPIキーを設定してください。")
         st.stop()
     
+    # 設定
+    genai.configure(api_key=api_key)
+
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
         full_response = ""
@@ -140,46 +143,70 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         else:
             content_to_send.append(current_msg)
 
-        # ★★★ 自動リトライロジック ★★★
-        # 候補モデルを順番に試して、成功するまでループする
+        # ★★★ 自己修復型リトライロジック ★★★
+        # 1. まずは優先リストで試す
+        PRIORITY_MODELS = [
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-pro"
+        ]
+        
         success = False
         last_error = None
+        
+        # 試行関数
+        def try_generate(model_name):
+            retry_model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+            chat = retry_model.start_chat(history=history_for_ai)
+            return chat.send_message(content_to_send, stream=True)
 
-        for model_name in CANDIDATE_MODELS:
+        # A. 優先リストでトライ
+        for model_name in PRIORITY_MODELS:
             try:
-                # モデルを初期化（システムプロンプト付き）
-                retry_model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-                chat = retry_model.start_chat(history=history_for_ai)
-                
-                # 送信してみる
-                response = chat.send_message(content_to_send, stream=True)
-                
-                # 成功したらストリーミング表示
+                response = try_generate(model_name)
                 for chunk in response:
                     if chunk.text:
                         full_response += chunk.text
                         response_placeholder.markdown(full_response)
-                
-                # ここまで来れば成功
                 success = True
-                break # ループを抜ける
-
-            except Exception as e:
-                # 失敗したら次のモデルへ
-                last_error = e
+                break
+            except Exception:
                 continue
         
+        # B. 優先リストが全滅した場合、サーバーから「本当に使えるリスト」を取得して再トライ（自己修復）
+        if not success:
+            try:
+                # ユーザーのAPIキーで使えるモデルを動的に取得
+                fetched_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                
+                # 取得したモデルで片っ端から試す
+                for model_name in fetched_models:
+                    try:
+                        response = try_generate(model_name)
+                        for chunk in response:
+                            if chunk.text:
+                                full_response += chunk.text
+                                response_placeholder.markdown(full_response)
+                        success = True
+                        break # 成功したら抜ける
+                    except Exception as e:
+                        last_error = e
+                        continue
+            except Exception as e:
+                # そもそもリスト取得すら失敗した場合（APIキー無効など）
+                last_error = e
+
         if success:
             st.session_state.messages.append({"role": "model", "content": full_response})
             st.rerun()
         else:
-            # 全てのモデルで失敗した場合
-            st.error("申し訳ありません。現在AIシステムに接続できません。")
-            with st.expander("詳細エラー"):
+            st.error("❌ エラー: AIシステムに接続できませんでした。")
+            st.warning("サイドバーの「🛠️ トラブルシューティング」ボタンを押して、APIキーが正しいか確認してください。")
+            with st.expander("詳細エラーログ"):
                 st.write(f"Last Error: {last_error}")
-                st.write("試行したモデル:", CANDIDATE_MODELS)
 
-# --- 8. 入力エリア ---
+# --- 7. 入力エリア ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
     current_key = st.session_state["form_key_index"]
