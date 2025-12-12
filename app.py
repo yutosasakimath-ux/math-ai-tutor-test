@@ -22,7 +22,7 @@ if "uploader_key" not in st.session_state:
 if "form_key_index" not in st.session_state:
     st.session_state["form_key_index"] = 0
 
-# --- 3. サイドバー（設定・診断） ---
+# --- 3. サイドバー（設定） ---
 with st.sidebar:
     st.header("⚙️ 設定")
     
@@ -30,11 +30,12 @@ with st.sidebar:
     st.session_state.student_name = st.text_input("あなたのお名前", value=st.session_state.student_name)
     
     # APIキー設定
+    # ※ 本番運用時は st.secrets で管理し、この入力欄も隠すことを推奨します
     api_key = ""
     try:
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ 認証済み (Secrets)")
+            # 認証済みメッセージも生徒には不要なので削除またはシンプルに
     except:
         pass
     
@@ -42,35 +43,6 @@ with st.sidebar:
         input_key = st.text_input("Gemini APIキー", type="password")
         if input_key: api_key = input_key.strip()
     
-    st.markdown("---")
-    
-    # ★★★ 接続診断ボタン ★★★
-    with st.expander("🛠️ トラブルシューティング"):
-        if st.button("🔑 接続テスト・利用可能モデル確認"):
-            if not api_key:
-                st.error("まずはAPIキーを入力してください。")
-            else:
-                try:
-                    genai.configure(api_key=api_key)
-                    st.write("Googleへの接続を試みています...")
-                    
-                    # 利用可能なモデル一覧を取得
-                    available_models = []
-                    for m in genai.list_models():
-                        if 'generateContent' in m.supported_generation_methods:
-                            available_models.append(m.name)
-                    
-                    if available_models:
-                        st.success(f"✅ 接続成功！利用可能なモデルが見つかりました ({len(available_models)}個)")
-                        st.code("\n".join(available_models))
-                        st.info("このリストにあるモデルを自動的に使用します。")
-                    else:
-                        st.warning("⚠️ 接続できましたが、チャットに使用できるモデルが見つかりませんでした。APIキーの種類（Vertex AI用など）を確認してください。")
-                        
-                except Exception as e:
-                    st.error(f"❌ 接続失敗: {e}")
-                    st.caption("APIキーが間違っているか、Google AI StudioでAPIが無効になっている可能性があります。")
-
     st.markdown("---")
     
     st.info(f"ようこそ、{st.session_state.student_name}さん。\n今日も一緒に頑張りましょう！")
@@ -110,7 +82,7 @@ for message in st.session_state.messages:
         else:
             st.markdown(content)
 
-# --- 6. AI応答ロジック（自己修復機能付き） ---
+# --- 6. AI応答ロジック（自己修復機能付き・内部処理のみ） ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     if not api_key:
         st.warning("左のサイドバーでAPIキーを設定してください。")
@@ -144,8 +116,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             content_to_send.append(current_msg)
 
         # ★★★ 戦略的モデル優先順位 ★★★
-        # あなたのアカウントで使えるモデルの中から、
-        # 「賢さ」と「コスト」のバランスが良い順に並べています。
         PRIORITY_MODELS = [
             "gemini-2.5-flash",       # 第1候補: 最新・高速・高コスパ（本命）
             "gemini-2.0-flash",       # 第2候補: 安定のバックアップ
@@ -166,21 +136,15 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         active_model = None
         for model_name in PRIORITY_MODELS:
             try:
-                # ユーザーの発言に対してレスポンス生成を試みる
-                # (モデル初期化だけでなく、実際にsend_messageしてエラーが出ないか確認)
                 response = try_generate(model_name)
-                
-                # 成功したらストリーミング開始
                 for chunk in response:
                     if chunk.text:
                         full_response += chunk.text
                         response_placeholder.markdown(full_response)
-                
                 success = True
                 active_model = model_name
                 break
             except Exception:
-                # このモデルがダメなら次へ
                 continue
         
         # B. 優先リストが全滅した場合、サーバーから「本当に使えるリスト」を取得して再トライ（自己修復）
@@ -205,14 +169,14 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
         if success:
             st.session_state.messages.append({"role": "model", "content": full_response})
-            # デバッグ用に実際に使われたモデルをログ出力（本番では消してもOK）
+            # 本番環境ではログ出力も不要であれば削除可能ですが、管理用としてprintは残しています
             print(f"Used Model: {active_model}")
             st.rerun()
         else:
-            st.error("❌ エラー: AIシステムに接続できませんでした。")
-            st.warning("サイドバーの「🛠️ トラブルシューティング」ボタンを押して、APIキーが正しいか確認してください。")
-            with st.expander("詳細エラーログ"):
-                st.write(f"Last Error: {last_error}")
+            # ここだけは生徒にもわかるようにエラーを表示する必要があります
+            st.error("❌ 接続エラー: 現在AIが応答できません。")
+            # 詳細ログは生徒に見せず、管理者（あなた）がコンソールで確認する運用にします
+            print(f"Connection Failed. Last Error: {last_error}")
 
 # --- 7. 入力エリア ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
