@@ -10,7 +10,7 @@ if "student_name" not in st.session_state:
     st.session_state.student_name = "ゲスト"
 
 st.title("🎓 高校数学 AI専属コーチ")
-st.caption("答えは教えません。「解き方」を一緒に考えましょう。")
+st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -30,12 +30,10 @@ with st.sidebar:
     st.session_state.student_name = st.text_input("あなたのお名前", value=st.session_state.student_name)
     
     # APIキー設定
-    # ※ 本番運用時は st.secrets で管理し、この入力欄も隠すことを推奨します
     api_key = ""
     try:
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            # 認証済みメッセージも生徒には不要なので削除またはシンプルに
     except:
         pass
     
@@ -45,7 +43,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    st.info(f"ようこそ、{st.session_state.student_name}さん。\n今日も一緒に頑張りましょう！")
+    st.info(f"ようこそ、{st.session_state.student_name}さん。\n焦らず基礎から固めていきましょう。")
 
     st.markdown("---")
     
@@ -54,20 +52,25 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# --- 4. プロンプト定義（ソクラテス式・教育特化） ---
+# --- 4. プロンプト定義（教科書完全準拠・品質重視） ---
 system_instruction = f"""
-あなたはプロの数学家庭教師です。相手は高校生の「{st.session_state.student_name}」さんです。
-以下のルールを厳格に守ってください。
+あなたは日本の進学校で教える、非常に優秀で忍耐強い数学教師です。
+相手は高校生の「{st.session_state.student_name}」さんです。
+数学が苦手、または赤点回避を目指している生徒に対して、**教科書の定義に基づいた正確かつ分かりやすい指導**を行ってください。
 
-【絶対ルール：ソクラテス式指導】
-1. **答えをすぐに教えないこと。** 生徒が自分で気づくように導いてください。
-2. 生徒から質問や画像の送信があった場合、「どこまで分かった？」「何が分からない？」と優しく問いかけてください。
-3. 決して上から目線にならず、伴走するパートナーとして振る舞ってください。
-4. 数式はLaTeX形式（$マーク）を使って綺麗に表示してください。
-5. 解説が長くなりすぎないように、会話のキャッチボールを重視してください。
+【指導の絶対ルール】
+1. **ソクラテス式指導:** - 答えをすぐに教えないでください。
+   - 「この公式は覚えている？」「図を描いてみた？」など、スモールステップで問いかけてください。
+2. **教科書準拠:** - 突飛な解法（ロピタルの定理などの大学範囲）は避け、高校数学の教科書範囲内の解法で導いてください。
+   - 定義や定理の使用条件（例：真数条件、判別式の条件）には厳密であってください。
+3. **優しさと承認:**
+   - 生徒が間違えても絶対に否定せず、「惜しい！」「その考え方は面白いね」と承認してから修正してください。
+4. **形式:**
+   - 数式は必ずLaTeX形式（$マーク）を使って綺麗に表示してください。
+   - 長文で畳み掛けず、会話のキャッチボールを重視してください。
 
 【画像が送られた場合】
-- 画像内の問題を読み取り、いきなり解答を書くのではなく、「この問題のどの方針で迷ってる？」とヒントを出してください。
+- 画像内の問題を読み取り、「どの方針で迷ってる？」とヒントを出してください。
 """
 
 # --- 5. チャット表示エリア ---
@@ -82,7 +85,7 @@ for message in st.session_state.messages:
         else:
             st.markdown(content)
 
-# --- 6. AI応答ロジック（自己修復機能付き・内部処理のみ） ---
+# --- 6. AI応答ロジック（品質重視のモデル選定） ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     if not api_key:
         st.warning("左のサイドバーでAPIキーを設定してください。")
@@ -115,12 +118,13 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         else:
             content_to_send.append(current_msg)
 
-        # ★★★ 戦略的モデル優先順位 ★★★
+        # ★★★ 品質最優先のモデル設定 ★★★
+        # 教科書レベルを「完璧」に説明するため、賢いモデルだけを使います。
         PRIORITY_MODELS = [
-            "gemini-2.5-flash",       # 第1候補: 最新・高速・高コスパ（本命）
-            "gemini-2.0-flash",       # 第2候補: 安定のバックアップ
-            "gemini-2.5-pro",         # 第3候補: 超高性能だがコスト高め（切り札）
-            "gemini-2.0-flash-lite"   # 第4候補: 超低コスト（緊急用）
+            "gemini-2.5-flash",       # 第1候補: 最新鋭。賢さと速度のバランスが最高。
+            "gemini-1.5-pro",         # 第2候補: 実績ある賢いモデル（Flashがダメな時の保険）
+            "gemini-2.0-flash"        # 第3候補: 予備
+            # "gemini-1.5-flash" は除外しました（解説の質にブレがあるため）
         ]
         
         success = False
@@ -147,7 +151,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             except Exception:
                 continue
         
-        # B. 優先リストが全滅した場合、サーバーから「本当に使えるリスト」を取得して再トライ（自己修復）
+        # B. 優先リストが全滅した場合、サーバーから「使えるモデル」を取得して再トライ
         if not success:
             try:
                 fetched_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -169,13 +173,11 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
         if success:
             st.session_state.messages.append({"role": "model", "content": full_response})
-            # 本番環境ではログ出力も不要であれば削除可能ですが、管理用としてprintは残しています
+            # 管理用ログ
             print(f"Used Model: {active_model}")
             st.rerun()
         else:
-            # ここだけは生徒にもわかるようにエラーを表示する必要があります
             st.error("❌ 接続エラー: 現在AIが応答できません。")
-            # 詳細ログは生徒に見せず、管理者（あなた）がコンソールで確認する運用にします
             print(f"Connection Failed. Last Error: {last_error}")
 
 # --- 7. 入力エリア ---
@@ -188,7 +190,7 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
 
     if input_type == "⌨️ テキストで質問":
         with st.form(key=f'text_form_{current_key}'):
-            user_text = st.text_area("ここに入力...", height=100, placeholder="例：二次関数の頂点の求め方がわかりません。")
+            user_text = st.text_area("ここに入力...", height=100, placeholder="例：教科書のこの定義がよく分かりません...")
             submit_btn = st.form_submit_button("送信", type="primary")
             
             if submit_btn and user_text:
@@ -197,9 +199,9 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                 st.rerun()
 
     elif input_type == "📸 画像で質問":
-        st.info("分からない問題の写真をアップロードしてください。")
+        st.info("教科書や問題集の写真をアップロードしてください。")
         img_file = st.file_uploader("画像をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
-        img_comment = st.text_input("補足（任意）", placeholder="例：(2)がわかりません", key=f"comment_{current_key}")
+        img_comment = st.text_input("補足（任意）", placeholder="例：(2)の解説をお願いします", key=f"comment_{current_key}")
         
         if st.button("画像で質問する", type="primary"):
             if img_file:
