@@ -42,14 +42,9 @@ with st.sidebar:
         if input_key: api_key = input_key.strip()
     
     st.markdown("---")
-
-    # ★★★ エラー対策：モデル名のカスタマイズ機能 ★★★
-    with st.expander("🔧 詳細設定（モデル変更）"):
-        st.caption("エラーが出る場合はモデル名を変更してください。\n例: gemini-pro, gemini-1.5-flash-latest")
-        # デフォルトを少し汎用的なものに変更
-        target_model_name = st.text_input("使用モデル名", value="gemini-1.5-flash")
-
-    st.markdown("---")
+    
+    # ★ 変更点: モデル選択UIを削除し、内部完結させました。
+    # ユーザーには余計な設定を見せず、学習に集中させます。
     
     st.info(f"ようこそ、{st.session_state.student_name}さん。\n今日も一緒に頑張りましょう！")
 
@@ -76,15 +71,32 @@ system_instruction = f"""
 - 画像内の問題を読み取り、いきなり解答を書くのではなく、「この問題のどの方針で迷ってる？」とヒントを出してください。
 """
 
-# --- 5. モデルのセットアップ ---
+# --- 5. モデルのセットアップ（自動フォールバック機能付き） ---
 model = None
+
+# 使用するモデルの候補リスト（優先順）
+# エラーが出た場合、ここにある順に自動で試していきます
+CANDIDATE_MODELS = [
+    "gemini-1.5-flash-latest", # 最新のFlash
+    "gemini-1.5-flash-001",    # バージョン指定Flash
+    "gemini-1.5-flash",        # 通常Flash
+    "gemini-pro"               # 最後の手段（Pro）
+]
+
 if api_key:
     genai.configure(api_key=api_key)
+    
+    # 有効なモデルを自動で探すロジック
+    active_model_name = None
+    
+    # モデルのインスタンス化を試みる
+    # 注: 実際にAPIを叩くまでエラーが出ないこともあるため、ここでは設定のみ行う
+    # とりあえず第一候補を採用し、エラー時にリトライする戦略をとります
+    active_model_name = CANDIDATE_MODELS[0]
     try:
-        model = genai.GenerativeModel(target_model_name, system_instruction=system_instruction)
+        model = genai.GenerativeModel(active_model_name, system_instruction=system_instruction)
     except Exception as e:
         st.error(f"モデル設定エラー: {e}")
-        st.stop()
 
 # --- 6. チャット表示エリア ---
 for message in st.session_state.messages:
@@ -98,7 +110,7 @@ for message in st.session_state.messages:
         else:
             st.markdown(content)
 
-# --- 7. AI応答ロジック ---
+# --- 7. AI応答ロジック（自動再試行機能付き） ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     if not api_key:
         st.warning("左のサイドバーでAPIキーを設定してください。")
@@ -107,55 +119,67 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
         full_response = ""
-        try:
-            # 履歴の構築
-            history_for_ai = []
-            for m in st.session_state.messages[:-1]:
-                if m["role"] != "system":
-                    text_content = ""
-                    if isinstance(m["content"], dict):
-                        text_content = m["content"].get("text", "")
-                    else:
-                        text_content = str(m["content"])
-                    history_for_ai.append({"role": m["role"], "parts": [text_content]})
-
-            # チャット開始（エラーハンドリング強化）
-            if model:
-                chat = model.start_chat(history=history_for_ai)
-                
-                # 最新メッセージの処理
-                current_msg = st.session_state.messages[-1]["content"]
-                content_to_send = []
-                
-                if isinstance(current_msg, dict):
-                    if "text" in current_msg: content_to_send.append(current_msg["text"])
-                    if "image" in current_msg: content_to_send.append(current_msg["image"])
+        
+        # 履歴の構築
+        history_for_ai = []
+        for m in st.session_state.messages[:-1]:
+            if m["role"] != "system":
+                text_content = ""
+                if isinstance(m["content"], dict):
+                    text_content = m["content"].get("text", "")
                 else:
-                    content_to_send.append(current_msg)
+                    text_content = str(m["content"])
+                history_for_ai.append({"role": m["role"], "parts": [text_content]})
 
-                # ストリーミング応答
+        # 最新メッセージ
+        current_msg = st.session_state.messages[-1]["content"]
+        content_to_send = []
+        if isinstance(current_msg, dict):
+            if "text" in current_msg: content_to_send.append(current_msg["text"])
+            if "image" in current_msg: content_to_send.append(current_msg["image"])
+        else:
+            content_to_send.append(current_msg)
+
+        # ★★★ 自動リトライロジック ★★★
+        # 候補モデルを順番に試して、成功するまでループする
+        success = False
+        last_error = None
+
+        for model_name in CANDIDATE_MODELS:
+            try:
+                # モデルを初期化（システムプロンプト付き）
+                retry_model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+                chat = retry_model.start_chat(history=history_for_ai)
+                
+                # 送信してみる
                 response = chat.send_message(content_to_send, stream=True)
                 
+                # 成功したらストリーミング表示
                 for chunk in response:
                     if chunk.text:
                         full_response += chunk.text
                         response_placeholder.markdown(full_response)
                 
-                st.session_state.messages.append({"role": "model", "content": full_response})
-                st.rerun() # 状態更新のためリロード
-            else:
-                 st.error("モデルの初期化に失敗しています。モデル名を確認してください。")
+                # ここまで来れば成功
+                success = True
+                break # ループを抜ける
 
-        except Exception as e:
-            # エラーメッセージを分かりやすく表示
-            error_msg = str(e)
-            if "404" in error_msg:
-                st.error(f"⚠️ エラー: モデル「{target_model_name}」が見つかりません。\nサイドバーの「詳細設定」からモデル名を変更してみてください。\n（試せる候補: gemini-1.5-flash-latest, gemini-pro, gemini-1.5-flash-001）")
-            else:
-                st.error(f"エラーが発生しました: {e}")
+            except Exception as e:
+                # 失敗したら次のモデルへ
+                last_error = e
+                continue
+        
+        if success:
+            st.session_state.messages.append({"role": "model", "content": full_response})
+            st.rerun()
+        else:
+            # 全てのモデルで失敗した場合
+            st.error("申し訳ありません。現在AIシステムに接続できません。")
+            with st.expander("詳細エラー"):
+                st.write(f"Last Error: {last_error}")
+                st.write("試行したモデル:", CANDIDATE_MODELS)
 
 # --- 8. 入力エリア ---
-# ユーザーの発言待ち状態のときだけ表示
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
     current_key = st.session_state["form_key_index"]
