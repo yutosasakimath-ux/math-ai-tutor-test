@@ -12,7 +12,7 @@ import time
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
 # ★ Stripeの商品ID
-STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
+STRIPE_PRICE_ID = "price_1SdhxIQpLmU93uYCGce6dPni"
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
