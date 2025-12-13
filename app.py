@@ -12,7 +12,7 @@ import time
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
 # ★ Stripeの商品ID
-STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
+STRIPE_PRICE_ID = "price_1SdhxIQpLmU93uYCGce6dPni"
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
@@ -158,9 +158,8 @@ with st.sidebar:
                 # 1. 注文書を作成
                 doc_ref = user_ref.collection("checkout_sessions").add({
                     "price": STRIPE_PRICE_ID,
-                    # ★★★ 修正箇所：アプリの正確なURLを設定 ★★★
-                    "success_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
-                    "cancel_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
+                    "success_url": "https://math-ai-tutor.streamlit.app/",
+                    "cancel_url": "https://math-ai-tutor.streamlit.app/",
                 })
                 session_id = doc_ref[1].id
                 
