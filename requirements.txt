@@ -1,4 +1,5 @@
 streamlit
 google-generativeai
+firebase-admin
+requests
 Pillow
-streamlit-drawable-canvas
