@@ -116,7 +116,7 @@ active_subs = user_ref.collection("subscriptions").where("status", "in", ["activ
 if len(active_subs) > 0:
     current_plan = "premium"
 
-# --- 5. サイドバー (診断機能統合) ---
+# --- 5. サイドバー ---
 with st.sidebar:
     st.header(f"こんにちは、{student_name}さん")
     
@@ -128,7 +128,7 @@ with st.sidebar:
                 "success_url": st.secrets.get("BASE_URL", "http://localhost:8501"),
                 "cancel_url": st.secrets.get("BASE_URL", "http://localhost:8501"),
             })
-            st.info("決済URLを生成中... 数秒待ってから下に出るリンクをクリックしてください。")
+            st.info("決済URLを生成中...")
             time.sleep(2)
             res = user_ref.collection("checkout_sessions").document(doc_ref[1].id).get()
             if res.exists and "url" in res.to_dict():
@@ -144,31 +144,22 @@ with st.sidebar:
         st.success("リセット完了")
         st.rerun()
 
-    # ★ システム診断セクション ★
-    with st.expander("🛠️ システム診断 (開発者向け)"):
-        st.write(f"現在のプラン: **{current_plan.upper()}**")
-        st.write(f"前回の使用モデル: `{st.session_state.last_used_model}`")
+    # システム診断
+    with st.expander("🛠️ システム診断"):
+        st.write(f"使用中プラン: **{current_plan.upper()}**")
+        st.write(f"稼働モデル: `{st.session_state.last_used_model}`")
         
-        # APIキー取得
         api_key = st.secrets.get("GEMINI_API_KEY", "")
         if not api_key:
             api_key = st.text_input("API Keyを入力", type="password")
 
-        if st.button("🔎 利用可能モデルをスキャン"):
+        if st.button("🔎 最新モデルをスキャン"):
             if api_key:
                 try:
                     genai.configure(api_key=api_key)
                     models = genai.list_models()
                     available = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
                     st.code("\n".join(available))
-                    
-                    # 3.0やThinkingの有無を確認
-                    has_3_0 = any("3.0" in m for m in available)
-                    has_thinking = any("thinking" in m.lower() or "2.0-flash-exp" in m for m in available)
-                    
-                    if has_3_0: st.success("✅ Gemini 3.0 利用可能！")
-                    if has_thinking: st.success("✅ Thinking(思考)モデル利用可能！")
-                    if not has_3_0 and not has_thinking: st.warning("⚠️ 2.5系列のみ利用可能です。")
                 except Exception as e:
                     st.error(f"スキャンエラー: {e}")
 
@@ -185,26 +176,25 @@ for msg in history:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
-# --- 7. AI応答ロジック ---
+# --- 7. AI応答ロジック (あなたのリストに基づく最適化) ---
 if prompt := st.chat_input("数学の悩みを教えてください"):
     if not api_key:
         st.error("APIキーが必要です")
         st.stop()
 
-    # ユーザーメッセージ保存
+    # メッセージ保存
     user_ref.collection("history").add({"role": "user", "content": prompt, "timestamp": firestore.SERVER_TIMESTAMP})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # モデル選定
-    # Gemini 3.0 Thinking や 2.0 Flash Exp を優先的にトライします
+    # ★★★ あなたの環境で使える最新・最高コスパモデルの布陣 ★★★
+    # 3.0-flash を最優先にします
     PRIORITY_MODELS = [
-        "gemini-3.0-flash-exp",
-        "gemini-3.0-flash",
-        "gemini-2.0-flash-thinking-exp", # 思考モード
-        "gemini-2.0-flash-exp",          # 2.0 実験版
-        "gemini-2.5-flash",              # 安定版
-        "gemini-1.5-pro"                 # バックアップ
+        "gemini-3-flash-preview",   # 1位：最新・高コスパ・高推論
+        "gemini-2.0-flash",         # 2位：高速・安定
+        "gemini-2.0-flash-exp",     # 3位：実験版2.0
+        "gemini-3-pro-preview",     # 4位：超難問用（コスト高め）
+        "gemini-2.5-flash",         # 5位：旧安定版
     ]
 
     genai.configure(api_key=api_key)
@@ -216,7 +206,7 @@ if prompt := st.chat_input("数学の悩みを教えてください"):
         d = m.to_dict()
         chat_history.append({"role": d["role"], "parts": [d["content"]]})
 
-    instruction = f"あなたは数学の個別指導講師です。生徒名:{student_name}。答えは出さず、ヒントを与えて思考を促してください。"
+    instruction = f"あなたは数学の個別指導講師です。生徒名:{student_name}。答えは出さず、ヒントを与えて思考を促してください。数式は必ず$を用いたLaTeX形式で書いてください。"
 
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
@@ -225,11 +215,12 @@ if prompt := st.chat_input("数学の悩みを教えてください"):
         
         for model_id in PRIORITY_MODELS:
             try:
-                model = genai.GenerativeModel(model_id, system_instruction=instruction)
-                chat = model.start_chat(history=chat_history[:-1]) # 今回のメッセージはまだ含めない
+                # モデル名の形式を 'models/' 付きに修正
+                full_model_id = f"models/{model_id}" if not model_id.startswith("models/") else model_id
                 
-                # 思考モード（Thinking）の場合、特別な設定が必要な場合があるため
-                # ここでは標準的なストリーミング送信を行います
+                model = genai.GenerativeModel(full_model_id, system_instruction=instruction)
+                chat = model.start_chat(history=chat_history[:-1])
+                
                 response = chat.send_message(prompt, stream=True)
                 
                 for chunk in response:
@@ -237,13 +228,13 @@ if prompt := st.chat_input("数学の悩みを教えてください"):
                         full_response += chunk.text
                         response_placeholder.markdown(full_response)
                 
-                st.session_state.last_used_model = model_id
+                st.session_state.last_used_model = full_model_id
                 success = True
                 break
             except Exception as e:
                 continue # 次のモデルを試す
 
         if not success:
-            st.error("現在、AIモデルにアクセスできません。")
+            st.error("申し訳ありません、現在AIの脳が混み合っています。少し時間をおいて再度お試しください。")
         else:
             user_ref.collection("history").add({"role": "model", "content": full_response, "timestamp": firestore.SERVER_TIMESTAMP})
