@@ -164,7 +164,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # ★★★ レポート生成機能の追加 ★★★
+    # ★★★ レポート生成機能の追加（修正版：モデル自動切り替え） ★★★
     st.subheader("📊 保護者用レポート")
     if st.button("📝 今日のレポートを作成"):
         if not messages:
@@ -210,14 +210,39 @@ with st.sidebar:
 
                     # レポート生成実行
                     genai.configure(api_key=api_key)
-                    # レポート生成には安定したFlashモデルを使用
-                    report_model = genai.GenerativeModel("models/gemini-1.5-flash", system_instruction=report_system_instruction)
-                    response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
                     
-                    st.session_state.last_report = response.text
-                    st.success("レポートを作成しました！")
+                    # ★修正：レポート生成でも複数のモデルを試すように変更
+                    REPORT_MODELS = [
+                        "gemini-2.0-flash",       # 最新・高速
+                        "gemini-1.5-flash",       # 安定
+                        "gemini-2.0-flash-exp",   # 最新実験版
+                        "gemini-1.5-pro"          # 高性能バックアップ
+                    ]
+                    
+                    report_text = ""
+                    success_report = False
+                    
+                    for model_name in REPORT_MODELS:
+                        try:
+                            # モデル名調整
+                            full_model_name = f"models/{model_name}" if not model_name.startswith("models/") else model_name
+                            report_model = genai.GenerativeModel(full_model_name, system_instruction=report_system_instruction)
+                            response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
+                            report_text = response.text
+                            success_report = True
+                            break # 成功したらループを抜ける
+                        except Exception as e:
+                            # 次のモデルへ
+                            continue
+                    
+                    if success_report and report_text:
+                        st.session_state.last_report = report_text
+                        st.success("レポートを作成しました！")
+                    else:
+                        st.error("レポート生成に失敗しました。すべてのAIモデルが応答しませんでした。")
+
                 except Exception as e:
-                    st.error(f"レポート生成エラー: {e}")
+                    st.error(f"予期せぬエラー: {e}")
 
     # レポートがある場合は表示
     if st.session_state.last_report:
