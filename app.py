@@ -164,7 +164,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # ★★★ レポート生成機能の追加（修正版：モデル自動切り替え） ★★★
+    # ★★★ レポート生成機能の修正（モデルリストの同期とエラー詳細表示） ★★★
     st.subheader("📊 保護者用レポート")
     if st.button("📝 今日のレポートを作成"):
         if not messages:
@@ -211,16 +211,20 @@ with st.sidebar:
                     # レポート生成実行
                     genai.configure(api_key=api_key)
                     
-                    # ★修正：レポート生成でも複数のモデルを試すように変更
+                    # ★修正：チャットで使用しているモデルリストと同じものを試す
                     REPORT_MODELS = [
-                        "gemini-2.0-flash",       # 最新・高速
-                        "gemini-1.5-flash",       # 安定
-                        "gemini-2.0-flash-exp",   # 最新実験版
-                        "gemini-1.5-pro"          # 高性能バックアップ
+                        "gemini-3-flash-preview", 
+                        "gemini-2.0-flash",       
+                        "gemini-2.0-flash-exp",   
+                        "gemini-2.5-flash",       
+                        "gemini-3-pro-preview",   
+                        "gemini-1.5-pro"          
                     ]
                     
                     report_text = ""
                     success_report = False
+                    
+                    error_logs = []
                     
                     for model_name in REPORT_MODELS:
                         try:
@@ -232,14 +236,19 @@ with st.sidebar:
                             success_report = True
                             break # 成功したらループを抜ける
                         except Exception as e:
-                            # 次のモデルへ
+                            # 失敗したらログに残して次へ
+                            error_logs.append(f"{model_name}: {str(e)}")
+                            time.sleep(0.5) # 少し待機
                             continue
                     
                     if success_report and report_text:
                         st.session_state.last_report = report_text
                         st.success("レポートを作成しました！")
                     else:
-                        st.error("レポート生成に失敗しました。すべてのAIモデルが応答しませんでした。")
+                        st.error("レポート生成に失敗しました。")
+                        with st.expander("詳細エラーログ"):
+                            for log in error_logs:
+                                st.write(log)
 
                 except Exception as e:
                     st.error(f"予期せぬエラー: {e}")
