@@ -54,15 +54,20 @@ footer {visibility: hidden;}
     display: flex;
     align-items: center;
     justify-content: center;
+    /* ↓追加：文字を透明にして「Browse files」等を完全に見えなくする */
+    color: transparent; 
 }
-/* ドラッグ＆ドロップのテキストやボタンを消す */
-[data-testid="stFileUploader"] section > div {
-    display: none; 
+
+/* ↓追加：内部のすべての要素（テキストやボタン）を強制的に消す */
+[data-testid="stFileUploader"] section > * {
+    display: none !important;
 }
-/* カメラアイコンを表示 */
+
+/* カメラアイコンを表示（透明にした文字色をここで黒に戻す） */
 [data-testid="stFileUploader"] section::after {
     content: "📷"; 
     font-size: 22px;
+    color: black; /* アイコンの色 */
     display: block;
     cursor: pointer;
 }
