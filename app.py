@@ -59,6 +59,8 @@ if "pro_usage_count" not in st.session_state:
     st.session_state.pro_usage_count = 0
 if "last_reset_date" not in st.session_state:
     st.session_state.last_reset_date = datetime.date.today()
+if "last_used_model" not in st.session_state:
+    st.session_state.last_used_model = "まだ回答していません"
 
 if st.session_state.last_reset_date != datetime.date.today():
     st.session_state.pro_usage_count = 0
@@ -107,7 +109,6 @@ user_ref = db.collection("users").document(user_id)
 user_doc = user_ref.get()
 
 if not user_doc.exists:
-    # 救済措置：customersも探す
     fallback_ref = db.collection("customers").document(user_id)
     if fallback_ref.get().exists:
         user_ref = fallback_ref
@@ -142,7 +143,6 @@ with st.sidebar:
             })
             st.info("決済URLを生成中...")
             time.sleep(2)
-            # 待機ループ
             checkout_url = None
             for _ in range(60):
                 time.sleep(1)
@@ -165,7 +165,6 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # ★★★ 会話履歴リセットボタン（機能維持） ★★★
     if st.button("🗑️ 会話履歴を全削除"):
         with st.spinner("履歴を削除中..."):
             batch = db.batch()
@@ -188,12 +187,39 @@ with st.sidebar:
         st.session_state.user_info = None
         st.rerun()
 
-    # APIキー取得
+    # ★★★ 復活させたデバッグ情報エリア ★★★
+    st.markdown("---")
+    st.caption("🛠️ 開発者用デバッグ情報")
+    
+    # モデル名の表示（色分け機能付き）
+    model_display = st.session_state.last_used_model
+    if "3.0" in str(model_display) or "2.0" in str(model_display):
+        st.success(f"🚀 {model_display} (最新版)")
+    elif "pro" in str(model_display):
+        st.warning(f"💎 {model_display} (Pro)")
+    else:
+        st.info(f"⚡ {model_display}")
+        
+    st.write(f"Pro Count: {st.session_state.pro_usage_count} / 15")
+
+    # APIキー取得（デバッグ用）
     api_key = ""
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
     if not api_key:
         api_key = st.text_input("Gemini APIキー", type="password")
+
+    # モデルリスト取得機能（必要であれば）
+    with st.expander("🔍 利用可能なモデル一覧"):
+        if st.button("モデルリスト取得"):
+            if api_key:
+                try:
+                    genai.configure(api_key=api_key)
+                    models = genai.list_models()
+                    available = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
+                    st.code("\n".join(available))
+                except Exception as e:
+                    st.error(f"取得エラー: {e}")
 
 # --- 6. チャット表示 ---
 st.title("🎓 AI数学コーチ")
@@ -210,24 +236,22 @@ if prompt := st.chat_input("数学の悩みを教えてください"):
         st.error("APIキーが必要です")
         st.stop()
 
-    # メッセージ保存
     user_ref.collection("history").add({"role": "user", "content": prompt, "timestamp": firestore.SERVER_TIMESTAMP})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # ★★★ 最新の優先順位（Gemini 3.0 Flash 優先） ★★★
+    # Gemini 3.0 優先リスト
     PRIORITY_MODELS = [
-        "gemini-3.0-flash-preview", # 最新エース
-        "gemini-3.0-flash",         # 表記ゆれ対応
-        "gemini-2.0-flash-exp",     # 安定の実験版
-        "gemini-2.5-flash",         # 従来の安定版
-        "gemini-1.5-pro"            # バックアップ
+        "gemini-3.0-flash-preview", 
+        "gemini-3.0-flash",
+        "gemini-2.0-flash-exp",
+        "gemini-2.5-flash",
+        "gemini-1.5-pro"
     ]
     PRO_LIMIT_PER_DAY = 15
 
     genai.configure(api_key=api_key)
     
-    # 履歴取得
     chat_history = []
     past_msgs = user_ref.collection("history").order_by("timestamp").get()
     for m in past_msgs:
@@ -242,7 +266,7 @@ if prompt := st.chat_input("数学の悩みを教えてください"):
         success = False
         
         for model_id in PRIORITY_MODELS:
-            # Proモデル制限チェック
+            # Pro制限
             if "pro" in model_id and st.session_state.pro_usage_count >= PRO_LIMIT_PER_DAY:
                 continue
 
@@ -258,7 +282,9 @@ if prompt := st.chat_input("数学の悩みを教えてください"):
                         full_response += chunk.text
                         response_placeholder.markdown(full_response)
                 
-                # Proカウントアップ
+                # デバッグ用にモデル名を保存
+                st.session_state.last_used_model = full_model_id
+                
                 if "pro" in model_id:
                     st.session_state.pro_usage_count += 1
                 
