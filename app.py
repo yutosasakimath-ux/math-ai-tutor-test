@@ -11,7 +11,7 @@ import time
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
-# ★ Stripeの商品ID（あなたの環境のもの）
+# ★ Stripeの商品ID
 STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
@@ -153,7 +153,6 @@ with st.sidebar:
         
         if st.button("👉 プレミアムに登録 (¥1,980/月)"):
             with st.spinner("決済システムに接続中...（初回は30秒ほどかかります）"):
-                # 1. 注文書を作成
                 doc_ref = user_ref.collection("checkout_sessions").add({
                     "price": STRIPE_PRICE_ID,
                     "success_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
@@ -161,14 +160,11 @@ with st.sidebar:
                 })
                 session_id = doc_ref[1].id
                 
-                # 2. URL生成待ち
                 checkout_url = None
                 error_msg = None
-                
                 for i in range(60):
                     time.sleep(1)
                     session_doc = user_ref.collection("checkout_sessions").document(session_id).get()
-                    
                     if session_doc.exists:
                         data = session_doc.to_dict()
                         if "url" in data:
@@ -184,9 +180,32 @@ with st.sidebar:
                     st.error(f"エラー: {error_msg}")
                 else:
                     st.error("⚠️ タイムアウトしました。")
-                    
-    st.markdown("---")
     
+    # ★★★ ここにリセット機能を追加 ★★★
+    st.markdown("---")
+    if st.button("🗑️ 会話履歴を全削除"):
+        with st.spinner("履歴を削除中..."):
+            # Firestoreのサブコレクション内のドキュメントを全て削除
+            batch = db.batch()
+            all_history = user_ref.collection("history").stream()
+            count = 0
+            for doc in all_history:
+                batch.delete(doc.reference)
+                count += 1
+                # バッチ処理の上限（500件）を超えないように分割コミット
+                if count >= 400:
+                    batch.commit()
+                    batch = db.batch()
+                    count = 0
+            
+            if count > 0:
+                batch.commit()
+                
+            st.success("履歴をリセットしました！")
+            time.sleep(1)
+            st.rerun()
+
+    st.markdown("---")
     if st.button("ログアウト"):
         st.session_state.user_info = None
         st.session_state.messages = []
@@ -195,7 +214,6 @@ with st.sidebar:
     st.markdown("---")
     st.caption("🛠️ 開発者用デバッグ情報")
     
-    # モデル名の表示色分け
     model_display = st.session_state.last_used_model
     if "3.0" in str(model_display):
         st.success(f"🚀 {model_display} (最新版)")
@@ -279,13 +297,13 @@ if prompt := st.chat_input("質問を入力してください..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # ★★★ ここが最強の布陣です ★★★
+        # ★★★ 最強の布陣 ★★★
         PRIORITY_MODELS = [
-            "gemini-3.0-flash-exp",   # 1. 最新の実験モデル（あれば使う）
-            "gemini-3.0-flash",       # 2. 最新の安定版（あれば使う）
-            "gemini-2.5-flash",       # 3. 従来のメイン（確実に動く）
-            "gemini-1.5-pro",         # 4. 賢いバックアップ
-            "gemini-2.0-flash"        # 5. 予備
+            "gemini-3.0-flash-exp",
+            "gemini-3.0-flash",
+            "gemini-2.5-flash",
+            "gemini-1.5-pro",
+            "gemini-2.0-flash"
         ]
         
         PRO_LIMIT_PER_DAY = 15 
