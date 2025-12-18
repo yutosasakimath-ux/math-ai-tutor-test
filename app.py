@@ -11,7 +11,7 @@ import time
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
-# ★ Stripeの商品ID（あなたの環境のもの）
+# ★ Stripeの商品ID
 STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
@@ -37,7 +37,7 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-# --- 2. 認証機能ヘルパー ---
+# --- 2. 認証機能ヘルパー関数 ---
 def sign_in_with_email(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_WEB_API_KEY}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
@@ -50,7 +50,7 @@ def sign_up_with_email(email, password):
     r = requests.post(url, json=payload)
     return r.json()
 
-# --- 3. セッション管理 ---
+# --- 3. セッション管理 & リミッター初期化 ---
 if "user_info" not in st.session_state:
     st.session_state.user_info = None
 if "pro_usage_count" not in st.session_state:
@@ -70,11 +70,15 @@ if "uploader_key" not in st.session_state:
 if "form_key_index" not in st.session_state:
     st.session_state.form_key_index = 0
 
-# --- 4. ログイン画面 ---
+# --- 4. UI: ログイン画面（未ログイン時） ---
 if st.session_state.user_info is None:
     st.title("🎓 AI数学コーチ：ログイン")
     
+    if "FIREBASE_WEB_API_KEY" not in st.secrets and FIREBASE_WEB_API_KEY == "ここにウェブAPIキーを貼り付ける":
+        st.warning("⚠️ Web APIキーが設定されていません。Streamlit Secretsを設定してください。")
+    
     tab1, tab2 = st.tabs(["ログイン", "新規登録"])
+    
     with tab1:
         with st.form("login_form"):
             email = st.text_input("メールアドレス")
@@ -86,8 +90,9 @@ if st.session_state.user_info is None:
                     st.error(f"ログイン失敗: {resp['error']['message']}")
                 else:
                     st.session_state.user_info = {"uid": resp["localId"], "email": resp["email"]}
-                    st.success("ログイン成功")
+                    st.success("ログインしました！")
                     st.rerun()
+
     with tab2:
         with st.form("signup_form"):
             new_email = st.text_input("メールアドレス")
@@ -98,7 +103,7 @@ if st.session_state.user_info is None:
                 if "error" in resp:
                     st.error(f"登録失敗: {resp['error']['message']}")
                 else:
-                    st.success("作成成功！ログインしてください。")
+                    st.success("アカウント作成成功！ログインしてください。")
     st.stop()
 
 # =========================================================
@@ -108,7 +113,7 @@ if st.session_state.user_info is None:
 user_id = st.session_state.user_info["uid"]
 user_email = st.session_state.user_info["email"]
 
-# --- 5. ユーザー情報とプラン確認 ---
+# --- 5. Firestoreからユーザーデータ取得 ---
 user_ref = db.collection("users").document(user_id)
 user_doc = user_ref.get()
 
@@ -184,26 +189,44 @@ with st.sidebar:
                     st.error(f"エラー: {error_msg}")
                 else:
                     st.error("⚠️ タイムアウトしました。")
-                    
+    
     st.markdown("---")
     
+    # リセット機能
+    if st.button("🗑️ 会話履歴を全削除"):
+        with st.spinner("履歴を削除中..."):
+            batch = db.batch()
+            all_history = user_ref.collection("history").stream()
+            count = 0
+            for doc in all_history:
+                batch.delete(doc.reference)
+                count += 1
+                if count >= 400:
+                    batch.commit()
+                    batch = db.batch()
+                    count = 0
+            if count > 0:
+                batch.commit()
+        st.success("履歴をリセットしました")
+        time.sleep(1)
+        st.rerun()
+
     if st.button("ログアウト"):
         st.session_state.user_info = None
         st.session_state.messages = []
         st.rerun()
     
+    # デバッグ情報
     st.markdown("---")
     st.caption("🛠️ 開発者用デバッグ情報")
-    
-    # モデル名の表示色分け
     model_display = st.session_state.last_used_model
-    if "3.0" in str(model_display):
+    if "3" in str(model_display):
         st.success(f"🚀 {model_display} (最新版)")
     elif "pro" in str(model_display):
         st.warning(f"💎 {model_display} (Pro)")
     else:
         st.info(f"⚡ {model_display}")
-        
+    
     st.write(f"Pro Count: {st.session_state.pro_usage_count} / 15")
 
     api_key = ""
@@ -279,13 +302,15 @@ if prompt := st.chat_input("質問を入力してください..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # ★★★ ここが最強の布陣です ★★★
+        # ★★★ 最適化されたモデル優先順位 ★★★
+        # あなたのリストにあった最新・高性能モデルを優先的に使用します
         PRIORITY_MODELS = [
-            "gemini-3.0-flash-exp",   # 1. 最新の実験モデル（あれば使う）
-            "gemini-3.0-flash",       # 2. 最新の安定版（あれば使う）
-            "gemini-2.5-flash",       # 3. 従来のメイン（確実に動く）
-            "gemini-1.5-pro",         # 4. 賢いバックアップ
-            "gemini-2.0-flash"        # 5. 予備
+            "gemini-3-flash-preview", # 最新エース
+            "gemini-2.0-flash",       # 高速・安定・激安
+            "gemini-2.0-flash-exp",   # 実験版（賢い）
+            "gemini-2.5-flash",       # 従来の安定版
+            "gemini-3-pro-preview",   # バックアップ（超賢いがコスト注意）
+            "gemini-1.5-pro"          # 最後の砦
         ]
         
         PRO_LIMIT_PER_DAY = 15 
@@ -294,11 +319,14 @@ if prompt := st.chat_input("質問を入力してください..."):
         active_model = None
         
         def try_generate(model_name):
-            retry_model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+            # APIの仕様に合わせてモデル名を調整
+            full_model_name = f"models/{model_name}" if not model_name.startswith("models/") else model_name
+            retry_model = genai.GenerativeModel(full_model_name, system_instruction=system_instruction)
             chat = retry_model.start_chat(history=history_for_ai)
             return chat.send_message(prompt, stream=True)
 
         for model_name in PRIORITY_MODELS:
+            # Proモデルの利用制限チェック
             if "pro" in model_name and st.session_state.pro_usage_count >= PRO_LIMIT_PER_DAY:
                 continue
 
@@ -317,7 +345,8 @@ if prompt := st.chat_input("質問を入力してください..."):
                 if "pro" in model_name:
                     st.session_state.pro_usage_count += 1
                 break
-            except:
+            except Exception as e:
+                # エラーが出たら次のモデルへ
                 continue
         
         if not success:
