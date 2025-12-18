@@ -24,7 +24,7 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 # テスト期間中は全員プレミアムなのでStripe IDは使いませんが、コード互換性のため残します
 STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
 # ★管理者用パスワード（新規登録やデータ閲覧に使用）
-ADMIN_KEY = "admin1234" 
+ADMIN_KEY = st.secrets["ADMIN_KEY"]
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
