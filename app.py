@@ -253,6 +253,27 @@ with st.sidebar:
     
     st.markdown("---")
 
+    # 【機能追加】利用可能なモデルをリストアップするボタン
+    if st.button("📡 利用可能なモデル一覧を取得"):
+        if not api_key:
+            st.error("APIキーが設定されていません")
+        else:
+            try:
+                genai.configure(api_key=api_key)
+                models = genai.list_models()
+                available_models = []
+                for m in models:
+                    if "generateContent" in m.supported_generation_methods:
+                        available_models.append(m.name.replace("models/", ""))
+                
+                st.success("取得成功！")
+                st.code("\n".join(available_models))
+                
+                # 自動的にログにも残す
+                st.session_state.debug_logs.append(f"Available Models:\n{', '.join(available_models)}")
+            except Exception as e:
+                st.error(f"取得エラー: {e}")
+
     # 【機能追加】デバッグログ表示エリア
     with st.expander("🛠 デバッグログ (エラー履歴)"):
         if st.session_state.debug_logs:
@@ -574,11 +595,12 @@ with st.form(key="chat_form", clear_on_submit=True):
                             content_str = str(m["content"])
                         history_for_ai.append({"role": m["role"], "parts": [content_str]})
 
-                    # ★★★ 修正点：3.0系モデルを最優先で復活させました ★★★
+                    # ★★★ 修正点：Gemini 3.0系などの最新モデルIDを正確に指定 ★★★
                     PRIORITY_MODELS = [
-                        "gemini-3.0-flash-preview", # 復活
-                        "gemini-2.5-flash", 
-                        "gemini-2.0-flash-exp",   
+                        "gemini-3-flash-preview",    # 3.0 Flash (名前注意: 3.0ではなく3)
+                        "gemini-3-pro-preview",      # 3.0 Pro
+                        "gemini-2.5-flash",          # 2.5系
+                        "gemini-2.0-flash-exp",      # 2.0系
                         "gemini-1.5-pro",
                         "gemini-1.5-flash"
                     ]
@@ -625,6 +647,11 @@ with st.form(key="chat_form", clear_on_submit=True):
                 # 3. AIの処理が終わったら、その「ぐるぐる」が消えて、同じ場所に「解答」が出る
                 if success_model:
                     st.session_state.last_used_model = success_model
+
+                    # ★★★ デバッグ情報：意図した最新モデル以外が使われた場合のみ警告 ★★★
+                    if success_model != PRIORITY_MODELS[0]:
+                        with st.chat_message("assistant"):
+                             st.warning(f"Note: 最新モデル ({PRIORITY_MODELS[0]}) が利用できなかったため、{success_model} を使用しました。")
                     
                     # 結果の保存（表示用）
                     st.session_state.messages.append({
