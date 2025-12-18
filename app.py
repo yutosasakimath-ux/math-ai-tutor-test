@@ -253,41 +253,6 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # 【機能追加】利用可能なモデルをリストアップするボタン
-    if st.button("📡 利用可能なモデル一覧を取得"):
-        if not api_key:
-            st.error("APIキーが設定されていません")
-        else:
-            try:
-                genai.configure(api_key=api_key)
-                models = genai.list_models()
-                available_models = []
-                for m in models:
-                    if "generateContent" in m.supported_generation_methods:
-                        available_models.append(m.name.replace("models/", ""))
-                
-                st.success("取得成功！")
-                st.code("\n".join(available_models))
-                
-                # 自動的にログにも残す
-                st.session_state.debug_logs.append(f"Available Models:\n{', '.join(available_models)}")
-            except Exception as e:
-                st.error(f"取得エラー: {e}")
-
-    # 【機能追加】デバッグログ表示エリア
-    with st.expander("🛠 デバッグログ (エラー履歴)"):
-        if st.session_state.debug_logs:
-            for i, log in enumerate(reversed(st.session_state.debug_logs)):
-                st.code(log, language="text")
-            
-            if st.button("ログ消去"):
-                st.session_state.debug_logs = []
-                st.rerun()
-        else:
-            st.write("現在エラーログはありません")
-
-    st.markdown("---")
-
     if st.button("🗑️ 会話履歴を全削除"):
         with st.spinner("履歴を保存して削除中..."):
             # 【ログ機能追加 1/2】 削除前に現在の会話をアーカイブ保存する
@@ -366,12 +331,54 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 管理者用：保護者レポート作成
-    with st.expander("管理者用：保護者レポート作成"):
+    # 管理者用：保護者レポート作成（兼 管理者ツール）
+    with st.expander("管理者用：管理メニュー"): 
         report_admin_pass = st.text_input("管理者パスワード", type="password", key="report_admin_pass")
         
         if ADMIN_KEY and report_admin_pass == ADMIN_KEY:
-            st.info("🔓 レポート作成モード")
+            st.info("🔓 管理者モード")
+
+            # --- 【追加】使用モデル情報 ---
+            st.markdown("### 🤖 モデル稼働状況")
+            st.info(f"**最後に使用したモデル:** `{st.session_state.last_used_model}`")
+
+            st.markdown("---")
+            
+            # --- 【移動】利用可能なモデル一覧を取得 ---
+            if st.button("📡 利用可能なモデル一覧を取得"):
+                if not api_key:
+                    st.error("APIキーが設定されていません")
+                else:
+                    try:
+                        genai.configure(api_key=api_key)
+                        models = genai.list_models()
+                        available_models = []
+                        for m in models:
+                            if "generateContent" in m.supported_generation_methods:
+                                available_models.append(m.name.replace("models/", ""))
+                        
+                        st.success("取得成功！")
+                        st.code("\n".join(available_models))
+                        
+                        # 自動的にログにも残す
+                        st.session_state.debug_logs.append(f"Available Models:\n{', '.join(available_models)}")
+                    except Exception as e:
+                        st.error(f"取得エラー: {e}")
+
+            # --- 【移動】デバッグログ (エラー履歴) ---
+            st.markdown("### 🛠 デバッグログ")
+            if st.session_state.debug_logs:
+                for i, log in enumerate(reversed(st.session_state.debug_logs)):
+                    st.code(log, language="text")
+                
+                if st.button("ログ消去"):
+                    st.session_state.debug_logs = []
+                    st.rerun()
+            else:
+                st.caption("現在エラーログはありません")
+            
+            st.markdown("---")
+            st.markdown("### 📝 レポート作成")
             
             if st.button("📝 今日のレポートを作成"):
                 if not st.session_state.messages:
