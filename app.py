@@ -11,15 +11,14 @@ import time
 # initial_sidebar_state="expanded" を追加し、PCでは最初からサイドバーを開くように設定
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
 
-# ★★★ UI設定：スマホ対応版 ★★★
-# headerを隠すとスマホでサイドバーが開けなくなるため、headerは表示しつつ、
-# 右上のメニュー(#MainMenu)とデプロイボタン(.stDeployButton)だけを隠します。
+# ★★★ UI設定：スマホ対応・修正版 ★★★
+# [data-testid="stToolbar"] を消すとスマホのサイドバーボタンも消えるため削除しました。
+# これで左上の「＞」ボタンが表示され、スマホでもメニューが開けるようになります。
 hide_streamlit_style = """
 <style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 .stDeployButton {display:none;}
-[data-testid="stToolbar"] {visibility: hidden;}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
