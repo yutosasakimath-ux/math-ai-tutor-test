@@ -164,18 +164,20 @@ if st.session_state.user_info is None:
                 st.error(f"ログイン失敗: {resp['error']['message']}")
             else:
                 st.session_state.user_info = {"uid": resp["localId"], "email": resp["email"]}
+                # ★修正点：ログイン成功時に、以前のユーザー名キャッシュをクリアして再取得させる
+                if "user_name" in st.session_state:
+                    del st.session_state["user_name"]
                 st.success("ログインしました！")
                 st.rerun()
 
     st.markdown("---")
     
-    # ★★★ 変更点：名前もここで登録するように修正 ★★★
     with st.expander("管理者用：新規アカウント作成"):
         admin_pass_input = st.text_input("管理者パスワード", type="password", key="admin_reg_pass")
         if ADMIN_KEY and admin_pass_input == ADMIN_KEY:
             st.info("🔓 管理者モード：新規モニターユーザーを作成します")
             with st.form("admin_signup_form"):
-                new_name_input = st.text_input("生徒のお名前") # 追加：名前入力欄
+                new_name_input = st.text_input("生徒のお名前") 
                 new_email = st.text_input("新規メールアドレス")
                 new_password = st.text_input("新規パスワード")
                 submit_new = st.form_submit_button("アカウントを作成する")
@@ -214,6 +216,7 @@ user_email = st.session_state.user_info["email"]
 
 # --- 5. Firestoreからユーザーデータ取得 ---
 user_ref = db.collection("users").document(user_id)
+# ログイン直後やリロード時、ここに名前が無ければFirestoreから取得
 if "user_name" not in st.session_state:
     user_doc = user_ref.get()
     if not user_doc.exists:
@@ -235,8 +238,10 @@ if not api_key:
 
 # --- 6. サイドバー ---
 with st.sidebar:
-    st.header(f"ようこそ")
-    new_name = st.text_input("お名前", value=student_name)
+    st.header(f"ようこそ、{student_name}さん")
+    
+    # ★修正点：ラベルをわかりやすく変更
+    new_name = st.text_input("お名前（AIが呼びかける名前）", value=student_name)
     if new_name != student_name:
         user_ref.update({"name": new_name})
         st.session_state.user_name = new_name
@@ -269,6 +274,9 @@ with st.sidebar:
         st.session_state.user_info = None
         st.session_state.messages = []
         st.session_state.messages_loaded = False
+        # ★修正点：ログアウト時に名前キャッシュもクリアする
+        if "user_name" in st.session_state:
+            del st.session_state["user_name"]
         st.rerun()
 
     st.markdown("---")
@@ -292,7 +300,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 管理者用：保護者レポート作成（修正版）
+    # 管理者用：保護者レポート作成
     with st.expander("管理者用：保護者レポート作成"):
         report_admin_pass = st.text_input("管理者パスワード", type="password", key="report_admin_pass")
         
