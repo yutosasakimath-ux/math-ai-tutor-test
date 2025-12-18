@@ -10,7 +10,9 @@ import time
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
+# テスト期間中は全員プレミアムなのでStripe IDは使いませんが、コード互換性のため残します
 STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
+# ★管理者用パスワード（新規登録やデータ閲覧に使用）
 ADMIN_KEY = "admin1234" 
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
@@ -49,26 +51,13 @@ def sign_up_with_email(email, password):
     r = requests.post(url, json=payload)
     return r.json()
 
-# --- 3. セッション管理 & リミッター初期化 ---
+# --- 3. セッション管理 ---
 if "user_info" not in st.session_state:
     st.session_state.user_info = None
-if "pro_usage_count" not in st.session_state:
-    st.session_state.pro_usage_count = 0
-if "last_reset_date" not in st.session_state:
-    st.session_state.last_reset_date = datetime.date.today()
 if "last_used_model" not in st.session_state:
     st.session_state.last_used_model = "まだ回答していません"
 if "last_report" not in st.session_state:
     st.session_state.last_report = ""
-
-if st.session_state.last_reset_date != datetime.date.today():
-    st.session_state.pro_usage_count = 0
-    st.session_state.last_reset_date = datetime.date.today()
-
-if "uploader_key" not in st.session_state:
-    st.session_state.uploader_key = 0
-if "form_key_index" not in st.session_state:
-    st.session_state.form_key_index = 0
 
 # --- 4. UI: ログイン画面（未ログイン時） ---
 if st.session_state.user_info is None:
@@ -77,33 +66,42 @@ if st.session_state.user_info is None:
     if "FIREBASE_WEB_API_KEY" not in st.secrets and FIREBASE_WEB_API_KEY == "ここにウェブAPIキーを貼り付ける":
         st.warning("⚠️ Web APIキーが設定されていません。Streamlit Secretsを設定してください。")
     
-    tab1, tab2 = st.tabs(["ログイン", "新規登録"])
-    
-    with tab1:
-        with st.form("login_form"):
-            email = st.text_input("メールアドレス", key="login_email_input")
-            password = st.text_input("パスワード", type="password", key="login_pass_input")
-            submit = st.form_submit_button("ログイン")
-            if submit:
-                resp = sign_in_with_email(email, password)
-                if "error" in resp:
-                    st.error(f"ログイン失敗: {resp['error']['message']}")
-                else:
-                    st.session_state.user_info = {"uid": resp["localId"], "email": resp["email"]}
-                    st.success("ログインしました！")
-                    st.rerun()
+    # ★変更点：タブを廃止し、ログインフォームのみを表示
+    with st.form("login_form"):
+        email = st.text_input("メールアドレス")
+        password = st.text_input("パスワード", type="password")
+        submit = st.form_submit_button("ログイン")
+        
+        if submit:
+            resp = sign_in_with_email(email, password)
+            if "error" in resp:
+                st.error(f"ログイン失敗: {resp['error']['message']}")
+            else:
+                st.session_state.user_info = {"uid": resp["localId"], "email": resp["email"]}
+                st.success("ログインしました！")
+                st.rerun()
 
-    with tab2:
-        with st.form("signup_form"):
-            new_email = st.text_input("メールアドレス", key="signup_email_input")
-            new_password = st.text_input("パスワード", type="password", key="signup_pass_input")
-            submit_new = st.form_submit_button("アカウント作成")
-            if submit_new:
-                resp = sign_up_with_email(new_email, new_password)
-                if "error" in resp:
-                    st.error(f"登録失敗: {resp['error']['message']}")
-                else:
-                    st.success("アカウント作成成功！ログインしてください。")
+    st.markdown("---")
+    
+    # ★変更点：管理者だけが開ける「新規登録」メニュー
+    with st.expander("管理者用：新規アカウント作成"):
+        admin_pass_input = st.text_input("管理者パスワード", type="password", key="admin_reg_pass")
+        if admin_pass_input == ADMIN_KEY:
+            st.info("🔓 管理者モード：新規モニターユーザーを作成します")
+            with st.form("admin_signup_form"):
+                new_email = st.text_input("新規メールアドレス")
+                new_password = st.text_input("新規パスワード")
+                submit_new = st.form_submit_button("アカウントを作成する")
+                
+                if submit_new:
+                    resp = sign_up_with_email(new_email, new_password)
+                    if "error" in resp:
+                        st.error(f"作成失敗: {resp['error']['message']}")
+                    else:
+                        st.success(f"アカウント作成成功！\nEmail: {new_email}\nPass: {new_password}\n\nこの情報を親御さんに送ってください。")
+        elif admin_pass_input:
+            st.error("パスワードが違います")
+            
     st.stop()
 
 # =========================================================
@@ -118,21 +116,16 @@ user_ref = db.collection("users").document(user_id)
 user_doc = user_ref.get()
 
 if not user_doc.exists:
-    user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP, "is_monitor": False} 
+    # 新規作成時はデフォルトでモニターフラグ等は不要（全員プレミアム扱いするため）
+    user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP} 
     user_ref.set(user_data)
     student_name = "ゲスト"
-    is_monitor = False
 else:
     user_data = user_doc.to_dict()
     student_name = user_data.get("name", "ゲスト")
-    is_monitor = user_data.get("is_monitor", False)
 
-current_plan = "free"
-subs_ref = user_ref.collection("subscriptions")
-active_subs = subs_ref.where("status", "in", ["active", "trialing"]).get()
-
-if len(active_subs) > 0 or is_monitor:
-    current_plan = "premium"
+# ★変更点：全員強制的にプレミアムプラン扱いにする
+current_plan = "premium"
 
 api_key = ""
 if "GEMINI_API_KEY" in st.secrets:
@@ -142,7 +135,7 @@ if not api_key:
 
 # --- 6. サイドバー ---
 with st.sidebar:
-    # 1. ようこそ（最上段）
+    # 1. ようこそ
     st.header(f"ようこそ")
     new_name = st.text_input("お名前", value=student_name)
     if new_name != student_name:
@@ -151,10 +144,9 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # 2. 保護者用レポート（最優先機能）
+    # 2. 保護者用レポート
     st.subheader("📊 保護者用レポート")
     
-    # チャット履歴読み込み
     history_ref = user_ref.collection("history").order_by("timestamp")
     docs = history_ref.stream()
     messages = []
@@ -231,50 +223,14 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 3. プラン状況
-    if current_plan == "premium":
-        st.success("👑 プレミアムプラン (or モニター)")
-        st.caption("全機能が使い放題です！")
-    else:
-        st.info("🥚 無料プラン")
-        st.write("プレミアムにアップグレードして\n学習を加速させよう！")
-        
-        if st.button("👉 プレミアムに登録 (¥1,980/月)"):
-            with st.spinner("決済システムに接続中..."):
-                doc_ref = user_ref.collection("checkout_sessions").add({
-                    "price": STRIPE_PRICE_ID,
-                    "success_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
-                    "cancel_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
-                })
-                session_id = doc_ref[1].id
-                
-                checkout_url = None
-                error_msg = None
-                
-                for i in range(60):
-                    time.sleep(1)
-                    session_doc = user_ref.collection("checkout_sessions").document(session_id).get()
-                    if session_doc.exists:
-                        data = session_doc.to_dict()
-                        if "url" in data:
-                            checkout_url = data["url"]
-                            break
-                        if "error" in data:
-                            error_msg = data["error"]["message"]
-                            break
-                
-                if checkout_url:
-                    st.link_button("💳 お支払い画面へ進む", checkout_url)
-                elif error_msg:
-                    st.error(f"エラー: {error_msg}")
-                else:
-                    st.error("⚠️ タイムアウトしました。")
+    # 3. プラン状況（全員プレミアム）
+    st.success("👑 モニター会員 (Pro機能有効)")
+    st.caption("現在、テスト期間につき全機能を開放しています。")
 
     st.markdown("---")
 
-    # 4. フィードバック（日常的に使って欲しい）
+    # 4. フィードバック
     st.caption("📢 ご意見・不具合報告")
-    # clear_on_submit=True を追加して送信後にフォームをリセット
     with st.form("feedback_form", clear_on_submit=True):
         feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の計算でエラーが出ました / 〇〇な機能が欲しいです")
         feedback_submit = st.form_submit_button("開発者に送信")
@@ -318,33 +274,10 @@ with st.sidebar:
     if not api_key:
         api_key = st.text_input("Gemini APIキー", type="password")
 
-    # 6. 管理者メニュー（最下部へ移動）
-    st.markdown("---")
-    with st.expander("管理者メニュー"):
-        admin_pass = st.text_input("Admin Key", type="password")
-        if admin_pass == ADMIN_KEY:
-            if not is_monitor:
-                if st.button("このアカウントをモニター（無料Pro）にする"):
-                    user_ref.update({"is_monitor": True})
-                    st.success("モニター権限を付与しました！リロードします。")
-                    time.sleep(1)
-                    st.rerun()
-            else:
-                st.info("✅ このアカウントはモニター権限を持っています")
-
 # --- 8. メイン画面 ---
 st.title("🎓 高校数学 AI専属コーチ")
 st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
 
-if current_plan == "free":
-    st.caption("※現在：無料プラン（機能制限あり）")
-
-# サイドバー外でも履歴読み込みが必要（メイン画面表示用）
-# ※サイドバー内ですでに messages をロードしていますが、
-# サイドバー外で変数スコープが切れる可能性があるため、安全のためここで再取得するか、
-# またはサイドバーの messages をそのまま使う。
-# 今回はStreamlitの実行フロー上、サイドバーの変数はメインでも参照可能ですが、
-# わかりやすくここでメイン表示用にループします。
 for msg in messages:
     with st.chat_message(msg["role"]):
         content = msg["content"]
@@ -354,7 +287,7 @@ for msg in messages:
         else:
             st.markdown(content)
 
-# --- 9. プロンプト定義（変更なし） ---
+# --- 9. プロンプト定義 ---
 system_instruction = f"""
 あなたは世界一の「ソクラテス式数学コーチ」です。
 生徒の名前は「{new_name}」さんです。
@@ -402,6 +335,7 @@ if prompt := st.chat_input("質問を入力してください..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
+        # モデルリスト（制限なしで順に試す）
         PRIORITY_MODELS = [
             "gemini-3-flash-preview", 
             "gemini-2.0-flash",       
@@ -410,8 +344,6 @@ if prompt := st.chat_input("質問を入力してください..."):
             "gemini-3-pro-preview",   
             "gemini-1.5-pro"          
         ]
-        
-        PRO_LIMIT_PER_DAY = 15 
         
         success = False
         active_model = None
@@ -423,10 +355,6 @@ if prompt := st.chat_input("質問を入力してください..."):
             return chat.send_message(prompt, stream=True)
 
         for model_name in PRIORITY_MODELS:
-            # モニター会員なら制限を無視
-            if not is_monitor and "pro" in model_name and st.session_state.pro_usage_count >= PRO_LIMIT_PER_DAY:
-                continue
-
             try:
                 response = try_generate(model_name)
                 full_res = ""
@@ -438,9 +366,6 @@ if prompt := st.chat_input("質問を入力してください..."):
                 response_text = full_res
                 success = True
                 active_model = model_name
-                
-                if "pro" in model_name:
-                    st.session_state.pro_usage_count += 1
                 break
             except Exception as e:
                 continue
