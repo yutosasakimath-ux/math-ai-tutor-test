@@ -250,25 +250,50 @@ with st.sidebar:
     st.markdown("---")
 
     if st.button("🗑️ 会話履歴を全削除"):
-        with st.spinner("履歴を削除中..."):
-            batch = db.batch()
-            all_history = user_ref.collection("history").stream()
-            count = 0
-            for doc in all_history:
-                batch.delete(doc.reference)
-                count += 1
-                if count >= 400:
+        with st.spinner("履歴を保存して削除中..."):
+            # 【ログ機能追加 1/2】 削除前に現在の会話をアーカイブ保存する
+            try:
+                # 全履歴を取得
+                history_stream = user_ref.collection("history").order_by("timestamp").stream()
+                session_logs = []
+                batch = db.batch()
+                doc_count = 0
+                
+                # ドキュメントを走査しながら、保存用リスト作成と削除用バッチ処理を行う
+                for doc in history_stream:
+                    data = doc.to_dict()
+                    session_logs.append(data) # アーカイブ用リストに追加
+                    batch.delete(doc.reference) # 削除予約
+                    doc_count += 1
+                    
+                    # バッチサイズの制限（500件）への対応
+                    if doc_count >= 400:
+                        batch.commit()
+                        batch = db.batch()
+                        doc_count = 0
+                
+                # 残りのバッチを実行
+                if doc_count > 0:
                     batch.commit()
-                    batch = db.batch()
-                    count = 0
-            if count > 0:
-                batch.commit()
-        st.session_state.last_report = "" 
-        st.session_state.messages = [] 
-        st.session_state.messages_loaded = True 
-        st.success("履歴をリセットしました")
-        time.sleep(1)
-        st.rerun()
+
+                # データがあった場合のみアーカイブ保存
+                if session_logs:
+                    user_ref.collection("archived_sessions").add({
+                        "archived_at": firestore.SERVER_TIMESTAMP,
+                        "messages": session_logs,
+                        "note": "ユーザーによる全削除時のバックアップ"
+                    })
+
+            except Exception as e:
+                st.error(f"ログ保存中にエラーが発生しましたが、処理を続行します: {e}")
+
+            # UI側のリセット処理
+            st.session_state.last_report = "" 
+            st.session_state.messages = [] 
+            st.session_state.messages_loaded = True 
+            st.success("履歴をリセットしました（ログは保存されました）")
+            time.sleep(1)
+            st.rerun()
 
     if st.button("ログアウト"):
         st.session_state.user_info = None
@@ -494,11 +519,19 @@ with st.form(key="chat_form", clear_on_submit=True):
                 "content": user_msg_content
             })
             
-            # Firestoreへ保存
+            # Firestoreへ保存（表示用）
             user_ref.collection("history").add({
                 "role": "user",
                 "content": user_msg_content,
                 "timestamp": firestore.SERVER_TIMESTAMP
+            })
+
+            # 【ログ機能追加 2/2】 逐次保存用ログにも書き込む（削除ボタンでも消えない）
+            user_ref.collection("full_conversation_logs").add({
+                "role": "user",
+                "content": user_msg_content,
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "log_type": "sequential"
             })
 
             # ★★★ 修正点：先ほど作った「チャットの枠（chat_log_container）」の中に表示を入れる ★★★
@@ -510,7 +543,6 @@ with st.form(key="chat_form", clear_on_submit=True):
                         st.image(upload_img_obj, width=200)
 
                 # 2. そのすぐ下で「ぐるぐる（思考中）」を回す
-                # これで、あなたの入力のすぐ下でAIが考えているように見えます
                 with st.spinner("AIコーチが思考中..."):
                     genai.configure(api_key=api_key)
                     history_for_ai = []
@@ -526,7 +558,7 @@ with st.form(key="chat_form", clear_on_submit=True):
                     PRIORITY_MODELS = [
                         "gemini-3.0-flash-preview", # 復活
                         "gemini-2.5-flash", 
-                        "gemini-2.0-flash-exp",    
+                        "gemini-2.0-flash-exp",   
                         "gemini-1.5-pro",
                         "gemini-1.5-flash"
                     ]
@@ -556,7 +588,7 @@ with st.form(key="chat_form", clear_on_submit=True):
                 if success_model:
                     st.session_state.last_used_model = success_model
                     
-                    # 結果の保存
+                    # 結果の保存（表示用）
                     st.session_state.messages.append({
                         "role": "model",
                         "content": ai_text
@@ -567,13 +599,21 @@ with st.form(key="chat_form", clear_on_submit=True):
                         "content": ai_text,
                         "timestamp": firestore.SERVER_TIMESTAMP
                     })
+
+                    # 【ログ機能追加 2/2】 逐次保存用ログにも書き込む（削除ボタンでも消えない）
+                    user_ref.collection("full_conversation_logs").add({
+                        "role": "model",
+                        "content": ai_text,
+                        "timestamp": firestore.SERVER_TIMESTAMP,
+                        "log_type": "sequential",
+                        "model": success_model
+                    })
                     
                     # AIの回答を表示（ここも chat_log_container の中）
                     with st.chat_message("model"):
                         st.markdown(ai_text)
                     
                     # 少し待ってからリロードして、正式に履歴として保存・表示
-                    # これにより、一瞬表示されて消える現象を防ぎます
                     time.sleep(0.1) 
                     st.rerun()
                 else:
