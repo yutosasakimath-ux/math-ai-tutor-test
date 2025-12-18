@@ -602,14 +602,14 @@ with st.form(key="chat_form", clear_on_submit=True):
                             content_str = str(m["content"])
                         history_for_ai.append({"role": m["role"], "parts": [content_str]})
 
-                    # ★★★ 修正点：Gemini 3.0系などの最新モデルIDを正確に指定 ★★★
+                    # ★★★ 修正点：コストと性能のバランスを考慮した最適順序に変更 ★★★
+                    # 戦略: Flash系で粘り、どうしてもダメな時だけProを使う（コスト爆増リスク回避）
                     PRIORITY_MODELS = [
-                        "gemini-3-flash-preview",    # 3.0 Flash (名前注意: 3.0ではなく3)
-                        "gemini-3-pro-preview",      # 3.0 Pro
-                        "gemini-2.5-flash",          # 2.5系
-                        "gemini-2.0-flash-exp",      # 2.0系
-                        "gemini-1.5-pro",
-                        "gemini-1.5-flash"
+                        "gemini-3-flash-preview",    # 1. 本命: 最新・高速・安価・高性能
+                        "gemini-2.0-flash-exp",      # 2. バックアップ(安): 3.0がコケてもここで安く受ける
+                        "gemini-1.5-flash",          # 3. バックアップ(安・安定): 枯れた技術で確実に返す
+                        "gemini-3-pro-preview",      # 4. 最後の砦(高): Flash全滅時のみ稼働。最高性能
+                        "gemini-1.5-pro",            # 5. 予備
                     ]
                     
                     ai_text = ""
