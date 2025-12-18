@@ -58,22 +58,15 @@ if "pro_usage_count" not in st.session_state:
 if "last_reset_date" not in st.session_state:
     st.session_state.last_reset_date = datetime.date.today()
 if "last_used_model" not in st.session_state:
-    st.session_state.last_used_model = "まだ回答していません"
+    st.session_state.last_used_model = "未実行"
 
 if st.session_state.last_reset_date != datetime.date.today():
     st.session_state.pro_usage_count = 0
     st.session_state.last_reset_date = datetime.date.today()
 
-# リセット用キー管理
-if "uploader_key" not in st.session_state:
-    st.session_state.uploader_key = 0
-if "form_key_index" not in st.session_state:
-    st.session_state.form_key_index = 0
-
 # --- 4. ログイン画面 ---
 if st.session_state.user_info is None:
     st.title("🎓 AI数学コーチ：ログイン")
-    
     tab1, tab2 = st.tabs(["ログイン", "新規登録"])
     with tab1:
         with st.form("login_form"):
@@ -86,7 +79,6 @@ if st.session_state.user_info is None:
                     st.error(f"ログイン失敗: {resp['error']['message']}")
                 else:
                     st.session_state.user_info = {"uid": resp["localId"], "email": resp["email"]}
-                    st.success("ログイン成功")
                     st.rerun()
     with tab2:
         with st.form("signup_form"):
@@ -102,251 +94,156 @@ if st.session_state.user_info is None:
     st.stop()
 
 # =========================================================
-# ログイン済みユーザーの世界
+# アプリメイン
 # =========================================================
 
 user_id = st.session_state.user_info["uid"]
 user_email = st.session_state.user_info["email"]
-
-# --- 5. ユーザー情報とプラン確認 ---
 user_ref = db.collection("users").document(user_id)
 user_doc = user_ref.get()
 
-# 救済措置：customersも探す
 if not user_doc.exists:
-    fallback_ref = db.collection("customers").document(user_id)
-    if fallback_ref.get().exists:
-        user_ref = fallback_ref
-        user_doc = user_ref.get()
-
-if not user_doc.exists:
-    user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP}
+    user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP, "name": "ゲスト"}
     user_ref.set(user_data)
-    student_name = "ゲスト"
 else:
     user_data = user_doc.to_dict()
-    student_name = user_data.get("name", "ゲスト")
 
-# 課金状態の判定
+student_name = user_data.get("name", "ゲスト")
+
+# 課金判定
 current_plan = "free"
-subs_ref = user_ref.collection("subscriptions")
-active_subs = subs_ref.where("status", "in", ["active", "trialing"]).get()
+active_subs = user_ref.collection("subscriptions").where("status", "in", ["active", "trialing"]).get()
 if len(active_subs) > 0:
     current_plan = "premium"
 
-# --- 6. サイドバー ---
+# --- 5. サイドバー (診断機能統合) ---
 with st.sidebar:
-    st.header(f"ようこそ")
-    new_name = st.text_input("お名前", value=student_name)
-    if new_name != student_name:
-        user_ref.update({"name": new_name})
-        st.rerun()
+    st.header(f"こんにちは、{student_name}さん")
     
-    st.markdown("---")
-    
-    if current_plan == "premium":
-        st.success("👑 プレミアムプラン")
-        st.caption("全機能が使い放題です！")
-    else:
-        st.info("🥚 無料プラン")
-        st.write("プレミアムにアップグレードして\n学習を加速させよう！")
-        
-        if st.button("👉 プレミアムに登録 (¥1,980/月)"):
-            with st.spinner("決済システムに接続中...（初回は30秒ほどかかります）"):
-                doc_ref = user_ref.collection("checkout_sessions").add({
-                    "price": STRIPE_PRICE_ID,
-                    "success_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
-                    "cancel_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
-                })
-                session_id = doc_ref[1].id
-                
-                checkout_url = None
-                error_msg = None
-                for i in range(60):
-                    time.sleep(1)
-                    session_doc = user_ref.collection("checkout_sessions").document(session_id).get()
-                    if session_doc.exists:
-                        data = session_doc.to_dict()
-                        if "url" in data:
-                            checkout_url = data["url"]
-                            break
-                        if "error" in data:
-                            error_msg = data["error"]["message"]
-                            break
-                
-                if checkout_url:
-                    st.link_button("💳 お支払い画面へ進む", checkout_url)
-                elif error_msg:
-                    st.error(f"エラー: {error_msg}")
-                else:
-                    st.error("⚠️ タイムアウトしました。")
-    
-    # ★★★ ここにリセット機能を追加 ★★★
-    st.markdown("---")
-    if st.button("🗑️ 会話履歴を全削除"):
-        with st.spinner("履歴を削除中..."):
-            # Firestoreのサブコレクション内のドキュメントを全て削除
-            batch = db.batch()
-            all_history = user_ref.collection("history").stream()
-            count = 0
-            for doc in all_history:
-                batch.delete(doc.reference)
-                count += 1
-                # バッチ処理の上限（500件）を超えないように分割コミット
-                if count >= 400:
-                    batch.commit()
-                    batch = db.batch()
-                    count = 0
-            
-            if count > 0:
-                batch.commit()
-                
-            st.success("履歴をリセットしました！")
-            time.sleep(1)
-            st.rerun()
+    # 決済リンク
+    if current_plan != "premium":
+        if st.button("👑 プレミアムにアップグレード"):
+            doc_ref = user_ref.collection("checkout_sessions").add({
+                "price": STRIPE_PRICE_ID,
+                "success_url": st.secrets.get("BASE_URL", "http://localhost:8501"),
+                "cancel_url": st.secrets.get("BASE_URL", "http://localhost:8501"),
+            })
+            st.info("決済URLを生成中... 数秒待ってから下に出るリンクをクリックしてください。")
+            time.sleep(2)
+            res = user_ref.collection("checkout_sessions").document(doc_ref[1].id).get()
+            if res.exists and "url" in res.to_dict():
+                st.link_button("💳 お支払い画面へ進む", res.to_dict()["url"])
 
     st.markdown("---")
+    
+    # リセットボタン
+    if st.button("🗑️ 会話履歴をリセット"):
+        all_history = user_ref.collection("history").get()
+        for doc in all_history:
+            doc.reference.delete()
+        st.success("リセット完了")
+        st.rerun()
+
+    # ★ システム診断セクション ★
+    with st.expander("🛠️ システム診断 (開発者向け)"):
+        st.write(f"現在のプラン: **{current_plan.upper()}**")
+        st.write(f"前回の使用モデル: `{st.session_state.last_used_model}`")
+        
+        # APIキー取得
+        api_key = st.secrets.get("GEMINI_API_KEY", "")
+        if not api_key:
+            api_key = st.text_input("API Keyを入力", type="password")
+
+        if st.button("🔎 利用可能モデルをスキャン"):
+            if api_key:
+                try:
+                    genai.configure(api_key=api_key)
+                    models = genai.list_models()
+                    available = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
+                    st.code("\n".join(available))
+                    
+                    # 3.0やThinkingの有無を確認
+                    has_3_0 = any("3.0" in m for m in available)
+                    has_thinking = any("thinking" in m.lower() or "2.0-flash-exp" in m for m in available)
+                    
+                    if has_3_0: st.success("✅ Gemini 3.0 利用可能！")
+                    if has_thinking: st.success("✅ Thinking(思考)モデル利用可能！")
+                    if not has_3_0 and not has_thinking: st.warning("⚠️ 2.5系列のみ利用可能です。")
+                except Exception as e:
+                    st.error(f"スキャンエラー: {e}")
+
     if st.button("ログアウト"):
         st.session_state.user_info = None
-        st.session_state.messages = []
         st.rerun()
-    
-    st.markdown("---")
-    st.caption("🛠️ 開発者用デバッグ情報")
-    
-    model_display = st.session_state.last_used_model
-    if "3.0" in str(model_display):
-        st.success(f"🚀 {model_display} (最新版)")
-    elif "pro" in str(model_display):
-        st.warning(f"💎 {model_display} (Pro)")
-    else:
-        st.info(f"⚡ {model_display}")
-        
-    st.write(f"Pro Count: {st.session_state.pro_usage_count} / 15")
 
-    api_key = ""
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
+# --- 6. チャット表示 ---
+st.title("🎓 AI数学コーチ")
+
+history = user_ref.collection("history").order_by("timestamp").stream()
+for msg in history:
+    m = msg.to_dict()
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+
+# --- 7. AI応答ロジック ---
+if prompt := st.chat_input("数学の悩みを教えてください"):
     if not api_key:
-        api_key = st.text_input("Gemini APIキー", type="password")
-
-# --- 7. チャット履歴読み込み ---
-history_ref = user_ref.collection("history").order_by("timestamp")
-docs = history_ref.stream()
-messages = []
-for doc in docs:
-    messages.append(doc.to_dict())
-
-# --- 8. メイン画面 ---
-st.title("🎓 高校数学 AI専属コーチ")
-st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
-
-if current_plan == "free":
-    st.caption("※現在：無料プラン（機能制限あり）")
-
-for msg in messages:
-    with st.chat_message(msg["role"]):
-        content = msg["content"]
-        if isinstance(content, dict):
-            if "text" in content:
-                st.markdown(content["text"])
-        else:
-            st.markdown(content)
-
-# --- 9. プロンプト定義 ---
-system_instruction = f"""
-あなたは日本の進学校で教える、非常に優秀で忍耐強い数学教師です。
-相手は高校生の「{new_name}」さんです。
-
-【指導の絶対ルール】
-1. **ソクラテス式指導:** 答えを教えず、問いかけで導くこと。
-2. **教科書準拠:** 高校数学の範囲内で解説すること。
-3. **優しさと承認:** 否定せず、褒めて伸ばすこと。
-4. **形式:** 数式はLaTeX形式（$マーク）を使用すること。
-
-【画像について】
-問題を読み取り、方針のヒントを出してください。
-"""
-
-# --- 10. AI応答ロジック（Gemini 3.0 Flash対応） ---
-if prompt := st.chat_input("質問を入力してください..."):
-    if not api_key:
-        st.warning("サイドバーでGemini APIキーを設定してください。")
+        st.error("APIキーが必要です")
         st.stop()
 
+    # ユーザーメッセージ保存
+    user_ref.collection("history").add({"role": "user", "content": prompt, "timestamp": firestore.SERVER_TIMESTAMP})
     with st.chat_message("user"):
         st.markdown(prompt)
-    user_ref.collection("history").add({
-        "role": "user",
-        "content": prompt,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
+
+    # モデル選定
+    # Gemini 3.0 Thinking や 2.0 Flash Exp を優先的にトライします
+    PRIORITY_MODELS = [
+        "gemini-3.0-flash-exp",
+        "gemini-3.0-flash",
+        "gemini-2.0-flash-thinking-exp", # 思考モード
+        "gemini-2.0-flash-exp",          # 2.0 実験版
+        "gemini-2.5-flash",              # 安定版
+        "gemini-1.5-pro"                 # バックアップ
+    ]
 
     genai.configure(api_key=api_key)
     
-    history_for_ai = []
-    for m in messages:
-        content_str = ""
-        if isinstance(m["content"], dict):
-            content_str = m["content"].get("text", "")
-        else:
-            content_str = str(m["content"])
-        history_for_ai.append({"role": m["role"], "parts": [content_str]})
+    # 履歴取得
+    chat_history = []
+    past_msgs = user_ref.collection("history").order_by("timestamp").get()
+    for m in past_msgs:
+        d = m.to_dict()
+        chat_history.append({"role": d["role"], "parts": [d["content"]]})
 
-    response_text = ""
+    instruction = f"あなたは数学の個別指導講師です。生徒名:{student_name}。答えは出さず、ヒントを与えて思考を促してください。"
+
     with st.chat_message("assistant"):
-        placeholder = st.empty()
-        
-        # ★★★ 最強の布陣 ★★★
-        PRIORITY_MODELS = [
-            "gemini-3.0-flash-exp",
-            "gemini-3.0-flash",
-            "gemini-2.5-flash",
-            "gemini-1.5-pro",
-            "gemini-2.0-flash"
-        ]
-        
-        PRO_LIMIT_PER_DAY = 15 
-        
+        response_placeholder = st.empty()
+        full_response = ""
         success = False
-        active_model = None
         
-        def try_generate(model_name):
-            retry_model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-            chat = retry_model.start_chat(history=history_for_ai)
-            return chat.send_message(prompt, stream=True)
-
-        for model_name in PRIORITY_MODELS:
-            if "pro" in model_name and st.session_state.pro_usage_count >= PRO_LIMIT_PER_DAY:
-                continue
-
+        for model_id in PRIORITY_MODELS:
             try:
-                response = try_generate(model_name)
-                full_res = ""
+                model = genai.GenerativeModel(model_id, system_instruction=instruction)
+                chat = model.start_chat(history=chat_history[:-1]) # 今回のメッセージはまだ含めない
+                
+                # 思考モード（Thinking）の場合、特別な設定が必要な場合があるため
+                # ここでは標準的なストリーミング送信を行います
+                response = chat.send_message(prompt, stream=True)
+                
                 for chunk in response:
                     if chunk.text:
-                        full_res += chunk.text
-                        placeholder.markdown(full_res)
+                        full_response += chunk.text
+                        response_placeholder.markdown(full_response)
                 
-                response_text = full_res
+                st.session_state.last_used_model = model_id
                 success = True
-                active_model = model_name
-                
-                if "pro" in model_name:
-                    st.session_state.pro_usage_count += 1
                 break
-            except:
-                continue
-        
-        if not success:
-            st.error("❌ 現在アクセスが集中しており応答できません。")
-            st.stop()
+            except Exception as e:
+                continue # 次のモデルを試す
 
-    st.session_state.last_used_model = active_model
-    user_ref.collection("history").add({
-        "role": "model",
-        "content": response_text,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
-    
-    st.rerun()
+        if not success:
+            st.error("現在、AIモデルにアクセスできません。")
+        else:
+            user_ref.collection("history").add({"role": "model", "content": full_response, "timestamp": firestore.SERVER_TIMESTAMP})
