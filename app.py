@@ -11,8 +11,6 @@ import time
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
 STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
-
-# ★管理者用パスワード（このパスワードを入力したアカウントは無条件でPro機能が使え、全データが見れる）
 ADMIN_KEY = "admin1234" 
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
@@ -120,7 +118,7 @@ user_ref = db.collection("users").document(user_id)
 user_doc = user_ref.get()
 
 if not user_doc.exists:
-    user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP, "is_monitor": False} # is_monitorフィールド追加
+    user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP, "is_monitor": False} 
     user_ref.set(user_data)
     student_name = "ゲスト"
     is_monitor = False
@@ -129,7 +127,6 @@ else:
     student_name = user_data.get("name", "ゲスト")
     is_monitor = user_data.get("is_monitor", False)
 
-# 課金状態の判定（★重要修正：モニターフラグがTrueなら無条件でプレミアム）
 current_plan = "free"
 subs_ref = user_ref.collection("subscriptions")
 active_subs = subs_ref.where("status", "in", ["active", "trialing"]).get()
@@ -151,7 +148,6 @@ with st.sidebar:
         user_ref.update({"name": new_name})
         st.rerun()
     
-    # ★モニター権限の手動付与（管理者用裏コマンド）
     with st.expander("管理者メニュー"):
         admin_pass = st.text_input("Admin Key", type="password")
         if admin_pass == ADMIN_KEY:
@@ -187,7 +183,7 @@ with st.sidebar:
                     あなたは学習塾の「保護者への報告担当者」です。
                     以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
                     生徒名は「{new_name}」さんです。
-                    ...（プロンプト省略：変更なし）...
+                    
                     【絶対遵守する出力フォーマット】
                     --------------------------------------------------
                     【📅 本日の学習レポート】
@@ -245,6 +241,23 @@ with st.sidebar:
 
     st.markdown("---")
 
+    # ★★★ フィードバック収集フォームの追加 ★★★
+    st.caption("📢 ご意見・不具合報告")
+    with st.form("feedback_form"):
+        feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の計算でエラーが出ました / 〇〇な機能が欲しいです")
+        feedback_submit = st.form_submit_button("開発者に送信")
+        if feedback_submit and feedback_content:
+            # Firestoreのfeedbackコレクションに保存
+            db.collection("feedback").add({
+                "user_id": user_id,
+                "email": user_email,
+                "content": feedback_content,
+                "timestamp": firestore.SERVER_TIMESTAMP
+            })
+            st.success("ありがとうございます！送信しました。")
+
+    st.markdown("---")
+
     if current_plan == "premium":
         st.success("👑 プレミアムプラン (or モニター)")
         st.caption("全機能が使い放題です！")
@@ -252,7 +265,6 @@ with st.sidebar:
         st.info("🥚 無料プラン")
         st.write("プレミアムにアップグレードして\n学習を加速させよう！")
         
-        # Stripe決済ボタン（一般公開時はこちらが使われる）
         if st.button("👉 プレミアムに登録 (¥1,980/月)"):
             with st.spinner("決済システムに接続中..."):
                 doc_ref = user_ref.collection("checkout_sessions").add({
@@ -399,8 +411,7 @@ if prompt := st.chat_input("質問を入力してください..."):
             return chat.send_message(prompt, stream=True)
 
         for model_name in PRIORITY_MODELS:
-            # モニター会員なら制限を無視する（Proカウントは増やすが制限には引っかからないロジックにする、あるいはここで制限解除）
-            # 今回はシンプルにモニターなら制限チェックをスキップ
+            # モニター会員なら制限を無視
             if not is_monitor and "pro" in model_name and st.session_state.pro_usage_count >= PRO_LIMIT_PER_DAY:
                 continue
 
