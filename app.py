@@ -7,6 +7,7 @@ import requests
 import json
 import datetime
 import time
+import io
 
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
@@ -17,6 +18,7 @@ STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
 if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
 else:
+    # ローカルテスト用など
     FIREBASE_WEB_API_KEY = "ここにウェブAPIキーを貼り付ける" 
 
 # --- 1. Firebase初期化 ---
@@ -24,6 +26,7 @@ if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
             key_dict = dict(st.secrets["firebase"])
+            # secretsの改行コード対応
             if "\\n" in key_dict["private_key"]:
                 key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(key_dict)
@@ -60,15 +63,10 @@ if "last_reset_date" not in st.session_state:
 if "last_used_model" not in st.session_state:
     st.session_state.last_used_model = "まだ回答していません"
 
+# 日付が変わったらカウントリセット
 if st.session_state.last_reset_date != datetime.date.today():
     st.session_state.pro_usage_count = 0
     st.session_state.last_reset_date = datetime.date.today()
-
-# リセット用キー管理
-if "uploader_key" not in st.session_state:
-    st.session_state.uploader_key = 0
-if "form_key_index" not in st.session_state:
-    st.session_state.form_key_index = 0
 
 # --- 4. UI: ログイン画面（未ログイン時） ---
 if st.session_state.user_info is None:
@@ -213,7 +211,6 @@ with st.sidebar:
 
     if st.button("ログアウト"):
         st.session_state.user_info = None
-        st.session_state.messages = []
         st.rerun()
     
     # デバッグ情報
@@ -249,17 +246,18 @@ st.caption("教科書の内容を「完璧」に理解しよう。答えは教�
 if current_plan == "free":
     st.caption("※現在：無料プラン（機能制限あり）")
 
+# 履歴表示
 for msg in messages:
     with st.chat_message(msg["role"]):
         content = msg["content"]
+        # テキスト表示
         if isinstance(content, dict):
             if "text" in content:
                 st.markdown(content["text"])
         else:
             st.markdown(content)
 
-# --- 9. プロンプト定義 ---
-# 変更案：より強力なソクラテス・プロンプト
+# --- 9. プロンプト定義（ソクラテスモード） ---
 system_instruction = f"""
 あなたは世界一の「ソクラテス式数学コーチ」です。
 生徒の名前は「{new_name}」さんです。
@@ -281,22 +279,46 @@ system_instruction = f"""
 親しみやすく、しかし厳格なコーチのように。生徒を励ましながら導いてください。
 """
 
-# --- 10. AI応答ロジック（Gemini 3.0 Flash対応） ---
-if prompt := st.chat_input("質問を入力してください..."):
+# --- 10. 入力エリア & AI応答ロジック ---
+
+# ★★★ 画像アップロード機能の追加 ★★★
+with st.container():
+    uploaded_file = st.file_uploader(
+        "📸 ノートや問題を撮影してアップロード", 
+        type=["jpg", "png", "jpeg"],
+        key="file_uploader"
+    )
+
+if prompt := st.chat_input("質問や回答を入力してください..."):
     if not api_key:
         st.warning("サイドバーでGemini APIキーを設定してください。")
         st.stop()
 
+    # ユーザー入力を表示
     with st.chat_message("user"):
-        st.markdown(prompt)
+        # 画像がある場合、プレビュー表示
+        if uploaded_file:
+            image_data = Image.open(uploaded_file)
+            st.image(image_data, caption="アップロードされたノート/問題", use_column_width=True)
+            st.markdown(prompt)
+            # 履歴に保存するためのログ（画像バイナリはDB容量圧迫するため、今回はテキストマーカーのみ保存）
+            save_content = f"[画像が送信されました] {prompt}"
+        else:
+            st.markdown(prompt)
+            save_content = prompt
+
+    # Firestoreに保存
     user_ref.collection("history").add({
         "role": "user",
-        "content": prompt,
+        "content": save_content,
         "timestamp": firestore.SERVER_TIMESTAMP
     })
 
+    # Gemini設定
     genai.configure(api_key=api_key)
     
+    # 履歴の構築（過去の画像はテキストとして扱う簡易実装）
+    # ※ 本格実装ではCloud Storageに画像を置き、履歴に画像URLを含める必要があります
     history_for_ai = []
     for m in messages:
         content_str = ""
@@ -310,15 +332,10 @@ if prompt := st.chat_input("質問を入力してください..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # ★★★ 最適化されたモデル優先順位 ★★★
-        # あなたのリストにあった最新・高性能モデルを優先的に使用します
         PRIORITY_MODELS = [
-            "gemini-3-flash-preview", # 最新エース
-            "gemini-2.0-flash",       # 高速・安定・激安
-            "gemini-2.0-flash-exp",   # 実験版（賢い）
-            "gemini-2.5-flash",       # 従来の安定版
-            "gemini-3-pro-preview",   # バックアップ（超賢いがコスト注意）
-            "gemini-1.5-pro"          # 最後の砦
+            "gemini-2.0-flash",       # 最新・画像認識に強い
+            "gemini-1.5-flash",       # バックアップ
+            "gemini-1.5-pro"          # 高精度バックアップ
         ]
         
         PRO_LIMIT_PER_DAY = 15 
@@ -327,14 +344,27 @@ if prompt := st.chat_input("質問を入力してください..."):
         active_model = None
         
         def try_generate(model_name):
-            # APIの仕様に合わせてモデル名を調整
+            # モデル名の調整
             full_model_name = f"models/{model_name}" if not model_name.startswith("models/") else model_name
             retry_model = genai.GenerativeModel(full_model_name, system_instruction=system_instruction)
-            chat = retry_model.start_chat(history=history_for_ai)
-            return chat.send_message(prompt, stream=True)
+            
+            # ★★★ 画像がある場合とない場合でAPI呼び出しを分ける ★★★
+            if uploaded_file:
+                # 画像がある場合：チャット履歴を含めず、今回だけのマルチモーダル入力として処理
+                # (Streamlitの仕様上、履歴内の過去画像を再送するのは複雑なため、今回は「今の画像」に集中させる)
+                img = Image.open(uploaded_file)
+                # 履歴情報をテキストコンテキストとしてプロンプトに付与
+                context_prompt = "【これまでの会話の流れ】\n" + "\n".join([f"{h['role']}: {h['parts'][0]}" for h in history_for_ai[-5:]]) # 直近5件
+                context_prompt += f"\n\n【今回の生徒の入力】\n{prompt}"
+                
+                # generate_contentを使用（ChatSessionではなく単発生成）
+                return retry_model.generate_content([context_prompt, img], stream=True)
+            else:
+                # 画像がない場合：通常のチャットセッション
+                chat = retry_model.start_chat(history=history_for_ai)
+                return chat.send_message(prompt, stream=True)
 
         for model_name in PRIORITY_MODELS:
-            # Proモデルの利用制限チェック
             if "pro" in model_name and st.session_state.pro_usage_count >= PRO_LIMIT_PER_DAY:
                 continue
 
@@ -354,7 +384,8 @@ if prompt := st.chat_input("質問を入力してください..."):
                     st.session_state.pro_usage_count += 1
                 break
             except Exception as e:
-                # エラーが出たら次のモデルへ
+                # エラーログ（デバッグ用）
+                print(f"Model {model_name} failed: {e}")
                 continue
         
         if not success:
