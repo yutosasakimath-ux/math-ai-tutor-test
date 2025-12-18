@@ -274,7 +274,8 @@ with st.sidebar:
 
     # 4. フィードバック（日常的に使って欲しい）
     st.caption("📢 ご意見・不具合報告")
-    with st.form("feedback_form"):
+    # clear_on_submit=True を追加して送信後にフォームをリセット
+    with st.form("feedback_form", clear_on_submit=True):
         feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の計算でエラーが出ました / 〇〇な機能が欲しいです")
         feedback_submit = st.form_submit_button("開発者に送信")
         if feedback_submit and feedback_content:
@@ -287,23 +288,8 @@ with st.sidebar:
             st.success("ありがとうございます！送信しました。")
 
     st.markdown("---")
-    
-    # 5. 管理者メニュー（一般ユーザーには邪魔なので下へ）
-    with st.expander("管理者メニュー"):
-        admin_pass = st.text_input("Admin Key", type="password")
-        if admin_pass == ADMIN_KEY:
-            if not is_monitor:
-                if st.button("このアカウントをモニター（無料Pro）にする"):
-                    user_ref.update({"is_monitor": True})
-                    st.success("モニター権限を付与しました！リロードします。")
-                    time.sleep(1)
-                    st.rerun()
-            else:
-                st.info("✅ このアカウントはモニター権限を持っています")
 
-    st.markdown("---")
-
-    # 6. システム操作（最下部）
+    # 5. システム操作
     if st.button("🗑️ 会話履歴を全削除"):
         with st.spinner("履歴を削除中..."):
             batch = db.batch()
@@ -331,6 +317,20 @@ with st.sidebar:
     st.markdown("---")
     if not api_key:
         api_key = st.text_input("Gemini APIキー", type="password")
+
+    # 6. 管理者メニュー（最下部へ移動）
+    st.markdown("---")
+    with st.expander("管理者メニュー"):
+        admin_pass = st.text_input("Admin Key", type="password")
+        if admin_pass == ADMIN_KEY:
+            if not is_monitor:
+                if st.button("このアカウントをモニター（無料Pro）にする"):
+                    user_ref.update({"is_monitor": True})
+                    st.success("モニター権限を付与しました！リロードします。")
+                    time.sleep(1)
+                    st.rerun()
+            else:
+                st.info("✅ このアカウントはモニター権限を持っています")
 
 # --- 8. メイン画面 ---
 st.title("🎓 高校数学 AI専属コーチ")
