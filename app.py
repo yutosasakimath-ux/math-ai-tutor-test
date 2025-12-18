@@ -66,7 +66,7 @@ if st.session_state.user_info is None:
     if "FIREBASE_WEB_API_KEY" not in st.secrets and FIREBASE_WEB_API_KEY == "ここにウェブAPIキーを貼り付ける":
         st.warning("⚠️ Web APIキーが設定されていません。Streamlit Secretsを設定してください。")
     
-    # ★変更点：タブを廃止し、ログインフォームのみを表示
+    # ログインフォーム
     with st.form("login_form"):
         email = st.text_input("メールアドレス")
         password = st.text_input("パスワード", type="password")
@@ -83,7 +83,7 @@ if st.session_state.user_info is None:
 
     st.markdown("---")
     
-    # ★変更点：管理者だけが開ける「新規登録」メニュー
+    # 管理者だけが開ける「新規登録」メニュー
     with st.expander("管理者用：新規アカウント作成"):
         admin_pass_input = st.text_input("管理者パスワード", type="password", key="admin_reg_pass")
         if admin_pass_input == ADMIN_KEY:
@@ -116,7 +116,6 @@ user_ref = db.collection("users").document(user_id)
 user_doc = user_ref.get()
 
 if not user_doc.exists:
-    # 新規作成時はデフォルトでモニターフラグ等は不要（全員プレミアム扱いするため）
     user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP} 
     user_ref.set(user_data)
     student_name = "ゲスト"
@@ -124,7 +123,7 @@ else:
     user_data = user_doc.to_dict()
     student_name = user_data.get("name", "ゲスト")
 
-# ★変更点：全員強制的にプレミアムプラン扱いにする
+# 全員強制的にプレミアムプラン扱い
 current_plan = "premium"
 
 api_key = ""
@@ -144,82 +143,90 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # 2. 保護者用レポート
-    st.subheader("📊 保護者用レポート")
-    
-    history_ref = user_ref.collection("history").order_by("timestamp")
-    docs = history_ref.stream()
-    messages = []
-    for doc in docs:
-        messages.append(doc.to_dict())
+    # 2. 【変更】管理者用：保護者レポート作成（パスワードロック）
+    with st.expander("管理者用：保護者レポート作成"):
+        report_admin_pass = st.text_input("管理者パスワード", type="password", key="report_admin_pass")
+        
+        if report_admin_pass == ADMIN_KEY:
+            st.info("🔓 レポート作成モード")
+            
+            # チャット履歴読み込み
+            history_ref = user_ref.collection("history").order_by("timestamp")
+            docs = history_ref.stream()
+            messages = []
+            for doc in docs:
+                messages.append(doc.to_dict())
 
-    if st.button("📝 今日のレポートを作成"):
-        if not messages:
-            st.warning("まだ学習履歴がありません。")
-        elif not api_key:
-            st.error("Gemini APIキーを設定してください。")
-        else:
-            with st.spinner("会話ログを分析中..."):
-                try:
-                    report_system_instruction = f"""
-                    あなたは学習塾の「保護者への報告担当者」です。
-                    以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
-                    生徒名は「{new_name}」さんです。
-                    
-                    【絶対遵守する出力フォーマット】
-                    --------------------------------------------------
-                    【📅 本日の学習レポート】
-                    生徒名：{new_name}
-
-                    ■ 学習トピック
-                    （ここに単元名やテーマを簡潔に書く）
-
-                    ■ 理解度スコア
-                    （1〜5の数字）/ 5
-                    （評価理由を1行で簡潔に）
-
-                    ■ 先生からのコメント
-                    （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
-
-                    ■ 保護者様へのアドバイス（今日のお声がけ）
-                    （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
-                    --------------------------------------------------
-                    """
-                    
-                    conversation_text = ""
-                    for m in messages[-20:]: 
-                        role_name = "先生" if m["role"] == "model" else "生徒"
-                        content_text = m["content"].get("text", "") if isinstance(m["content"], dict) else str(m["content"])
-                        conversation_text += f"{role_name}: {content_text}\n"
-
-                    genai.configure(api_key=api_key)
-                    REPORT_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-                    
-                    report_text = ""
-                    success_report = False
-                    
-                    for model_name in REPORT_MODELS:
+            if st.button("📝 今日のレポートを作成"):
+                if not messages:
+                    st.warning("まだ学習履歴がありません。")
+                elif not api_key:
+                    st.error("Gemini APIキーを設定してください。")
+                else:
+                    with st.spinner("会話ログを分析中..."):
                         try:
-                            full_model_name = f"models/{model_name}" if not model_name.startswith("models/") else model_name
-                            report_model = genai.GenerativeModel(full_model_name, system_instruction=report_system_instruction)
-                            response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
-                            report_text = response.text
-                            success_report = True
-                            break
+                            report_system_instruction = f"""
+                            あなたは学習塾の「保護者への報告担当者」です。
+                            以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
+                            生徒名は「{new_name}」さんです。
+                            
+                            【絶対遵守する出力フォーマット】
+                            --------------------------------------------------
+                            【📅 本日の学習レポート】
+                            生徒名：{new_name}
+
+                            ■ 学習トピック
+                            （ここに単元名やテーマを簡潔に書く）
+
+                            ■ 理解度スコア
+                            （1〜5の数字）/ 5
+                            （評価理由を1行で簡潔に）
+
+                            ■ 先生からのコメント
+                            （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
+
+                            ■ 保護者様へのアドバイス（今日のお声がけ）
+                            （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
+                            --------------------------------------------------
+                            """
+                            
+                            conversation_text = ""
+                            for m in messages[-20:]: 
+                                role_name = "先生" if m["role"] == "model" else "生徒"
+                                content_text = m["content"].get("text", "") if isinstance(m["content"], dict) else str(m["content"])
+                                conversation_text += f"{role_name}: {content_text}\n"
+
+                            genai.configure(api_key=api_key)
+                            REPORT_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+                            
+                            report_text = ""
+                            success_report = False
+                            
+                            for model_name in REPORT_MODELS:
+                                try:
+                                    full_model_name = f"models/{model_name}" if not model_name.startswith("models/") else model_name
+                                    report_model = genai.GenerativeModel(full_model_name, system_instruction=report_system_instruction)
+                                    response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
+                                    report_text = response.text
+                                    success_report = True
+                                    break
+                                except Exception as e:
+                                    continue
+                            
+                            if success_report and report_text:
+                                st.session_state.last_report = report_text
+                                st.success("レポートを作成しました！")
+                            else:
+                                st.error("レポート生成に失敗しました。")
+
                         except Exception as e:
-                            continue
-                    
-                    if success_report and report_text:
-                        st.session_state.last_report = report_text
-                        st.success("レポートを作成しました！")
-                    else:
-                        st.error("レポート生成に失敗しました。")
+                            st.error(f"予期せぬエラー: {e}")
 
-                except Exception as e:
-                    st.error(f"予期せぬエラー: {e}")
-
-    if st.session_state.last_report:
-        st.text_area("コピーしてLINEで送れます", st.session_state.last_report, height=300)
+            if st.session_state.last_report:
+                st.text_area("コピーしてLINEで送れます", st.session_state.last_report, height=300)
+        
+        elif report_admin_pass:
+            st.error("パスワードが違います")
 
     st.markdown("---")
 
@@ -278,6 +285,14 @@ with st.sidebar:
 st.title("🎓 高校数学 AI専属コーチ")
 st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
 
+# サイドバーで履歴読み込みを条件分岐に入れたため、メイン表示用にもう一度読み込むか、
+# もしくは全員に表示する必要があるため、ここで再取得が安全
+history_ref = user_ref.collection("history").order_by("timestamp")
+docs = history_ref.stream()
+messages = []
+for doc in docs:
+    messages.append(doc.to_dict())
+
 for msg in messages:
     with st.chat_message(msg["role"]):
         content = msg["content"]
@@ -335,7 +350,6 @@ if prompt := st.chat_input("質問を入力してください..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # モデルリスト（制限なしで順に試す）
         PRIORITY_MODELS = [
             "gemini-3-flash-preview", 
             "gemini-2.0-flash",       
