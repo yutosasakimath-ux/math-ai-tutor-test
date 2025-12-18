@@ -309,6 +309,9 @@ with st.sidebar:
 
                             ■ 先生からのコメント
                             （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
+
+                            ■ 保護者様へのアドバイス（今日のお声がけ）
+                            （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
                             --------------------------------------------------
                             """
                             
@@ -494,7 +497,9 @@ with st.form(key="chat_form", clear_on_submit=True):
                             content_str = str(m["content"])
                         history_for_ai.append({"role": m["role"], "parts": [content_str]})
 
+                    # ★★★ 修正点：3.0系モデルを最優先で復活させました ★★★
                     PRIORITY_MODELS = [
+                        "gemini-3.0-flash-preview", # 復活
                         "gemini-2.5-flash", 
                         "gemini-2.0-flash-exp",   
                         "gemini-1.5-pro",
