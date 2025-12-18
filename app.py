@@ -134,7 +134,7 @@ if not api_key:
 
 # --- 6. サイドバー ---
 with st.sidebar:
-    # 1. ようこそ
+    # 1. ようこそ（最上段）
     st.header(f"ようこそ")
     new_name = st.text_input("お名前", value=student_name)
     if new_name != student_name:
@@ -143,22 +143,72 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # 2. 【変更】管理者用：保護者レポート作成（パスワードロック）
+    # 2. 会話履歴削除（生徒がよく使う）
+    if st.button("🗑️ 会話履歴を全削除"):
+        with st.spinner("履歴を削除中..."):
+            batch = db.batch()
+            all_history = user_ref.collection("history").stream()
+            count = 0
+            for doc in all_history:
+                batch.delete(doc.reference)
+                count += 1
+                if count >= 400:
+                    batch.commit()
+                    batch = db.batch()
+                    count = 0
+            if count > 0:
+                batch.commit()
+        st.session_state.last_report = "" 
+        st.success("履歴をリセットしました")
+        time.sleep(1)
+        st.rerun()
+
+    # 3. ログアウト（生徒がよく使う）
+    if st.button("ログアウト"):
+        st.session_state.user_info = None
+        st.session_state.messages = []
+        st.rerun()
+
+    st.markdown("---")
+
+    # 4. フィードバック（気軽に使ってほしい）
+    st.caption("📢 ご意見・不具合報告")
+    with st.form("feedback_form", clear_on_submit=True):
+        feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の計算でエラーが出ました / 〇〇な機能が欲しいです")
+        feedback_submit = st.form_submit_button("開発者に送信")
+        if feedback_submit and feedback_content:
+            db.collection("feedback").add({
+                "user_id": user_id,
+                "email": user_email,
+                "content": feedback_content,
+                "timestamp": firestore.SERVER_TIMESTAMP
+            })
+            st.success("ありがとうございます！送信しました。")
+
+    st.markdown("---")
+
+    # 5. プラン状況
+    st.success("👑 モニター会員 (Pro機能有効)")
+    st.caption("現在、テスト期間につき全機能を開放しています。")
+
+    st.markdown("---")
+
+    # 6. 管理者用：保護者レポート作成（一番下へ）
     with st.expander("管理者用：保護者レポート作成"):
         report_admin_pass = st.text_input("管理者パスワード", type="password", key="report_admin_pass")
         
         if report_admin_pass == ADMIN_KEY:
             st.info("🔓 レポート作成モード")
             
-            # チャット履歴読み込み
+            # チャット履歴読み込み（レポート用）
             history_ref = user_ref.collection("history").order_by("timestamp")
             docs = history_ref.stream()
-            messages = []
+            messages_for_report = []
             for doc in docs:
-                messages.append(doc.to_dict())
+                messages_for_report.append(doc.to_dict())
 
             if st.button("📝 今日のレポートを作成"):
-                if not messages:
+                if not messages_for_report:
                     st.warning("まだ学習履歴がありません。")
                 elif not api_key:
                     st.error("Gemini APIキーを設定してください。")
@@ -191,7 +241,8 @@ with st.sidebar:
                             """
                             
                             conversation_text = ""
-                            for m in messages[-20:]: 
+                            # 直近20件を使用
+                            for m in messages_for_report[-20:]: 
                                 role_name = "先生" if m["role"] == "model" else "生徒"
                                 content_text = m["content"].get("text", "") if isinstance(m["content"], dict) else str(m["content"])
                                 conversation_text += f"{role_name}: {content_text}\n"
@@ -229,55 +280,6 @@ with st.sidebar:
             st.error("パスワードが違います")
 
     st.markdown("---")
-
-    # 3. プラン状況（全員プレミアム）
-    st.success("👑 モニター会員 (Pro機能有効)")
-    st.caption("現在、テスト期間につき全機能を開放しています。")
-
-    st.markdown("---")
-
-    # 4. フィードバック
-    st.caption("📢 ご意見・不具合報告")
-    with st.form("feedback_form", clear_on_submit=True):
-        feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の計算でエラーが出ました / 〇〇な機能が欲しいです")
-        feedback_submit = st.form_submit_button("開発者に送信")
-        if feedback_submit and feedback_content:
-            db.collection("feedback").add({
-                "user_id": user_id,
-                "email": user_email,
-                "content": feedback_content,
-                "timestamp": firestore.SERVER_TIMESTAMP
-            })
-            st.success("ありがとうございます！送信しました。")
-
-    st.markdown("---")
-
-    # 5. システム操作
-    if st.button("🗑️ 会話履歴を全削除"):
-        with st.spinner("履歴を削除中..."):
-            batch = db.batch()
-            all_history = user_ref.collection("history").stream()
-            count = 0
-            for doc in all_history:
-                batch.delete(doc.reference)
-                count += 1
-                if count >= 400:
-                    batch.commit()
-                    batch = db.batch()
-                    count = 0
-            if count > 0:
-                batch.commit()
-        st.session_state.last_report = "" 
-        st.success("履歴をリセットしました")
-        time.sleep(1)
-        st.rerun()
-
-    if st.button("ログアウト"):
-        st.session_state.user_info = None
-        st.session_state.messages = []
-        st.rerun()
-    
-    st.markdown("---")
     if not api_key:
         api_key = st.text_input("Gemini APIキー", type="password")
 
@@ -285,8 +287,7 @@ with st.sidebar:
 st.title("🎓 高校数学 AI専属コーチ")
 st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
 
-# サイドバーで履歴読み込みを条件分岐に入れたため、メイン表示用にもう一度読み込むか、
-# もしくは全員に表示する必要があるため、ここで再取得が安全
+# メイン表示用の履歴読み込み（全員に表示するため再取得）
 history_ref = user_ref.collection("history").order_by("timestamp")
 docs = history_ref.stream()
 messages = []
