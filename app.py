@@ -10,6 +10,17 @@ import time
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
+# ★★★ UI設定：メニューバー、フッター、GitHubリンク等を隠すCSS（追加部分） ★★★
+hide_streamlit_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            .stDeployButton {display:none;}
+            </style>
+            """
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 # テスト期間中は全員プレミアムなのでStripe IDは使いませんが、コード互換性のため残します
 STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
 # ★管理者用パスワード（新規登録やデータ閲覧に使用）
@@ -248,7 +259,7 @@ with st.sidebar:
                                 conversation_text += f"{role_name}: {content_text}\n"
 
                             genai.configure(api_key=api_key)
-                            REPORT_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+                            REPORT_MODELS = ["gemini-3-flash-preview", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
                             
                             report_text = ""
                             success_report = False
