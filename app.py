@@ -142,26 +142,16 @@ if not api_key:
 
 # --- 6. サイドバー ---
 with st.sidebar:
+    # 1. ようこそ（最上段）
     st.header(f"ようこそ")
     new_name = st.text_input("お名前", value=student_name)
     if new_name != student_name:
         user_ref.update({"name": new_name})
         st.rerun()
     
-    with st.expander("管理者メニュー"):
-        admin_pass = st.text_input("Admin Key", type="password")
-        if admin_pass == ADMIN_KEY:
-            if not is_monitor:
-                if st.button("このアカウントをモニター（無料Pro）にする"):
-                    user_ref.update({"is_monitor": True})
-                    st.success("モニター権限を付与しました！リロードします。")
-                    time.sleep(1)
-                    st.rerun()
-            else:
-                st.info("✅ このアカウントはモニター権限を持っています")
-
     st.markdown("---")
-    
+
+    # 2. 保護者用レポート（最優先機能）
     st.subheader("📊 保護者用レポート")
     
     # チャット履歴読み込み
@@ -241,23 +231,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ★★★ フィードバック収集フォームの追加 ★★★
-    st.caption("📢 ご意見・不具合報告")
-    with st.form("feedback_form"):
-        feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の計算でエラーが出ました / 〇〇な機能が欲しいです")
-        feedback_submit = st.form_submit_button("開発者に送信")
-        if feedback_submit and feedback_content:
-            # Firestoreのfeedbackコレクションに保存
-            db.collection("feedback").add({
-                "user_id": user_id,
-                "email": user_email,
-                "content": feedback_content,
-                "timestamp": firestore.SERVER_TIMESTAMP
-            })
-            st.success("ありがとうございます！送信しました。")
-
-    st.markdown("---")
-
+    # 3. プラン状況
     if current_plan == "premium":
         st.success("👑 プレミアムプラン (or モニター)")
         st.caption("全機能が使い放題です！")
@@ -295,9 +269,41 @@ with st.sidebar:
                     st.error(f"エラー: {error_msg}")
                 else:
                     st.error("⚠️ タイムアウトしました。")
-    
+
+    st.markdown("---")
+
+    # 4. フィードバック（日常的に使って欲しい）
+    st.caption("📢 ご意見・不具合報告")
+    with st.form("feedback_form"):
+        feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の計算でエラーが出ました / 〇〇な機能が欲しいです")
+        feedback_submit = st.form_submit_button("開発者に送信")
+        if feedback_submit and feedback_content:
+            db.collection("feedback").add({
+                "user_id": user_id,
+                "email": user_email,
+                "content": feedback_content,
+                "timestamp": firestore.SERVER_TIMESTAMP
+            })
+            st.success("ありがとうございます！送信しました。")
+
     st.markdown("---")
     
+    # 5. 管理者メニュー（一般ユーザーには邪魔なので下へ）
+    with st.expander("管理者メニュー"):
+        admin_pass = st.text_input("Admin Key", type="password")
+        if admin_pass == ADMIN_KEY:
+            if not is_monitor:
+                if st.button("このアカウントをモニター（無料Pro）にする"):
+                    user_ref.update({"is_monitor": True})
+                    st.success("モニター権限を付与しました！リロードします。")
+                    time.sleep(1)
+                    st.rerun()
+            else:
+                st.info("✅ このアカウントはモニター権限を持っています")
+
+    st.markdown("---")
+
+    # 6. システム操作（最下部）
     if st.button("🗑️ 会話履歴を全削除"):
         with st.spinner("履歴を削除中..."):
             batch = db.batch()
@@ -333,6 +339,12 @@ st.caption("教科書の内容を「完璧」に理解しよう。答えは教�
 if current_plan == "free":
     st.caption("※現在：無料プラン（機能制限あり）")
 
+# サイドバー外でも履歴読み込みが必要（メイン画面表示用）
+# ※サイドバー内ですでに messages をロードしていますが、
+# サイドバー外で変数スコープが切れる可能性があるため、安全のためここで再取得するか、
+# またはサイドバーの messages をそのまま使う。
+# 今回はStreamlitの実行フロー上、サイドバーの変数はメインでも参照可能ですが、
+# わかりやすくここでメイン表示用にループします。
 for msg in messages:
     with st.chat_message(msg["role"]):
         content = msg["content"]
