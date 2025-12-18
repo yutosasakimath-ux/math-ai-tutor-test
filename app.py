@@ -59,6 +59,9 @@ if "last_reset_date" not in st.session_state:
     st.session_state.last_reset_date = datetime.date.today()
 if "last_used_model" not in st.session_state:
     st.session_state.last_used_model = "まだ回答していません"
+# レポート結果保持用
+if "last_report" not in st.session_state:
+    st.session_state.last_report = ""
 
 if st.session_state.last_reset_date != datetime.date.today():
     st.session_state.pro_usage_count = 0
@@ -81,7 +84,6 @@ if st.session_state.user_info is None:
     
     with tab1:
         with st.form("login_form"):
-            # DuplicateWidgetIDエラー防止のため、keyは残しますが、特殊文字は排除しました
             email = st.text_input("メールアドレス", key="login_email_input")
             password = st.text_input("パスワード", type="password", key="login_pass_input")
             submit = st.form_submit_button("ログイン")
@@ -118,7 +120,6 @@ user_email = st.session_state.user_info["email"]
 user_ref = db.collection("users").document(user_id)
 user_doc = user_ref.get()
 
-# 救済措置：customersも探す
 if not user_doc.exists:
     fallback_ref = db.collection("customers").document(user_id)
     if fallback_ref.get().exists:
@@ -133,12 +134,25 @@ else:
     user_data = user_doc.to_dict()
     student_name = user_data.get("name", "ゲスト")
 
-# 課金状態の判定
 current_plan = "free"
 subs_ref = user_ref.collection("subscriptions")
 active_subs = subs_ref.where("status", "in", ["active", "trialing"]).get()
 if len(active_subs) > 0:
     current_plan = "premium"
+
+api_key = ""
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+if not api_key:
+    # サイドバーで入力させるためここでは空にしておく
+    pass
+
+# --- 7. チャット履歴読み込み（レポート生成にも使用） ---
+history_ref = user_ref.collection("history").order_by("timestamp")
+docs = history_ref.stream()
+messages = []
+for doc in docs:
+    messages.append(doc.to_dict())
 
 # --- 6. サイドバー ---
 with st.sidebar:
@@ -150,6 +164,67 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # ★★★ レポート生成機能の追加 ★★★
+    st.subheader("📊 保護者用レポート")
+    if st.button("📝 今日のレポートを作成"):
+        if not messages:
+            st.warning("まだ学習履歴がありません。")
+        elif not api_key:
+            st.error("Gemini APIキーを設定してください。")
+        else:
+            with st.spinner("会話ログを分析中..."):
+                try:
+                    # レポート用プロンプトの構築
+                    report_system_instruction = f"""
+                    あなたは学習塾の「保護者への報告担当者」です。
+                    以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
+                    生徒名は「{new_name}」さんです。
+
+                    【絶対遵守する出力フォーマット】
+                    以下の枠内の形式そのままで出力してください。余計な挨拶や前置きは禁止です。
+                    --------------------------------------------------
+                    【📅 本日の学習レポート】
+                    生徒名：{new_name}
+
+                    ■ 学習トピック
+                    （ここに単元名やテーマを簡潔に書く）
+
+                    ■ 理解度スコア
+                    （1〜5の数字）/ 5
+                    （評価理由を1行で簡潔に）
+
+                    ■ 先生からのコメント
+                    （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
+
+                    ■ 保護者様へのアドバイス（今日のお声がけ）
+                    （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
+                    --------------------------------------------------
+                    """
+                    
+                    # 会話ログのテキスト化（直近20ターン程度で十分）
+                    conversation_text = ""
+                    for m in messages[-20:]: 
+                        role_name = "先生" if m["role"] == "model" else "生徒"
+                        content_text = m["content"].get("text", "") if isinstance(m["content"], dict) else str(m["content"])
+                        conversation_text += f"{role_name}: {content_text}\n"
+
+                    # レポート生成実行
+                    genai.configure(api_key=api_key)
+                    # レポート生成には安定したFlashモデルを使用
+                    report_model = genai.GenerativeModel("models/gemini-1.5-flash", system_instruction=report_system_instruction)
+                    response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
+                    
+                    st.session_state.last_report = response.text
+                    st.success("レポートを作成しました！")
+                except Exception as e:
+                    st.error(f"レポート生成エラー: {e}")
+
+    # レポートがある場合は表示
+    if st.session_state.last_report:
+        st.text_area("コピーしてLINEで送れます", st.session_state.last_report, height=300)
+
+    st.markdown("---")
+
     if current_plan == "premium":
         st.success("👑 プレミアムプラン")
         st.caption("全機能が使い放題です！")
@@ -158,8 +233,7 @@ with st.sidebar:
         st.write("プレミアムにアップグレードして\n学習を加速させよう！")
         
         if st.button("👉 プレミアムに登録 (¥1,980/月)"):
-            with st.spinner("決済システムに接続中...（初回は30秒ほどかかります）"):
-                # 1. 注文書を作成
+            with st.spinner("決済システムに接続中..."):
                 doc_ref = user_ref.collection("checkout_sessions").add({
                     "price": STRIPE_PRICE_ID,
                     "success_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
@@ -167,14 +241,12 @@ with st.sidebar:
                 })
                 session_id = doc_ref[1].id
                 
-                # 2. URL生成待ち
                 checkout_url = None
                 error_msg = None
                 
                 for i in range(60):
                     time.sleep(1)
                     session_doc = user_ref.collection("checkout_sessions").document(session_id).get()
-                    
                     if session_doc.exists:
                         data = session_doc.to_dict()
                         if "url" in data:
@@ -193,7 +265,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # リセット機能
     if st.button("🗑️ 会話履歴を全削除"):
         with st.spinner("履歴を削除中..."):
             batch = db.batch()
@@ -208,6 +279,7 @@ with st.sidebar:
                     count = 0
             if count > 0:
                 batch.commit()
+        st.session_state.last_report = "" # レポートもクリア
         st.success("履歴をリセットしました")
         time.sleep(1)
         st.rerun()
@@ -230,18 +302,8 @@ with st.sidebar:
     
     st.write(f"Pro Count: {st.session_state.pro_usage_count} / 15")
 
-    api_key = ""
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
     if not api_key:
         api_key = st.text_input("Gemini APIキー", type="password")
-
-# --- 7. チャット履歴読み込み ---
-history_ref = user_ref.collection("history").order_by("timestamp")
-docs = history_ref.stream()
-messages = []
-for doc in docs:
-    messages.append(doc.to_dict())
 
 # --- 8. メイン画面 ---
 st.title("🎓 高校数学 AI専属コーチ")
@@ -260,7 +322,6 @@ for msg in messages:
             st.markdown(content)
 
 # --- 9. プロンプト定義 ---
-# より強力なソクラテス・プロンプト
 system_instruction = f"""
 あなたは世界一の「ソクラテス式数学コーチ」です。
 生徒の名前は「{new_name}」さんです。
@@ -282,7 +343,7 @@ system_instruction = f"""
 親しみやすく、しかし厳格なコーチのように。生徒を励ましながら導いてください。
 """
 
-# --- 10. AI応答ロジック（Gemini 3.0 Flash対応） ---
+# --- 10. AI応答ロジック ---
 if prompt := st.chat_input("質問を入力してください..."):
     if not api_key:
         st.warning("サイドバーでGemini APIキーを設定してください。")
@@ -311,14 +372,14 @@ if prompt := st.chat_input("質問を入力してください..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # ★★★ ご希望の最新モデルリストに戻しました ★★★
+        # モデルリスト（最新優先）
         PRIORITY_MODELS = [
-            "gemini-3-flash-preview", # 最新エース
-            "gemini-2.0-flash",       # 高速・安定・激安
-            "gemini-2.0-flash-exp",   # 実験版（賢い）
-            "gemini-2.5-flash",       # 従来の安定版
-            "gemini-3-pro-preview",   # バックアップ（超賢いがコスト注意）
-            "gemini-1.5-pro"          # 最後の砦
+            "gemini-3-flash-preview", 
+            "gemini-2.0-flash",       
+            "gemini-2.0-flash-exp",   
+            "gemini-2.5-flash",       
+            "gemini-3-pro-preview",   
+            "gemini-1.5-pro"          
         ]
         
         PRO_LIMIT_PER_DAY = 15 
