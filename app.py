@@ -6,7 +6,7 @@ import requests
 import json
 import datetime
 import time
-from PIL import Image # 画像処理用に追加
+from PIL import Image
 
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
@@ -254,7 +254,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 6. 管理者用：保護者レポート作成（一番下へ）
+    # 6. 管理者用：保護者レポート作成（修正版）
     with st.expander("管理者用：保護者レポート作成"):
         report_admin_pass = st.text_input("管理者パスワード", type="password", key="report_admin_pass")
         
@@ -297,26 +297,48 @@ with st.sidebar:
                             
                             conversation_text = ""
                             # セッションステートから履歴を取得（最新20件）
+                            # 修正: 文字列取得をより安全に
                             for m in st.session_state.messages[-20:]: 
                                 role_name = "先生" if m["role"] == "model" else "生徒"
-                                content_text = m["content"].get("text", "") if isinstance(m["content"], dict) else str(m["content"])
+                                
+                                # コンテンツが辞書か文字列かで分岐して安全に取り出す
+                                raw_content = m["content"]
+                                content_text = ""
+                                if isinstance(raw_content, str):
+                                    content_text = raw_content
+                                elif isinstance(raw_content, dict):
+                                    content_text = raw_content.get("text", str(raw_content))
+                                else:
+                                    content_text = str(raw_content)
+
                                 conversation_text += f"{role_name}: {content_text}\n"
 
                             genai.configure(api_key=api_key)
-                            # レポート用モデルリスト
-                            REPORT_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro"]
+                            
+                            # 修正: レポート用モデルリストを更新＆拡充
+                            REPORT_MODELS = [
+                                "gemini-1.5-flash",
+                                "gemini-1.5-pro",
+                                "gemini-2.0-flash-exp",
+                                "gemini-2.5-flash"
+                            ]
                             
                             report_text = ""
                             success_report = False
+                            error_log = [] # デバッグ用エラーログ
                             
                             for model_name in REPORT_MODELS:
                                 try:
                                     report_model = genai.GenerativeModel(model_name, system_instruction=report_system_instruction)
                                     response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
-                                    report_text = response.text
-                                    success_report = True
-                                    break
+                                    
+                                    if response.text:
+                                        report_text = response.text
+                                        success_report = True
+                                        # 成功したらループを抜ける
+                                        break
                                 except Exception as e:
+                                    error_log.append(f"{model_name}: {str(e)}")
                                     continue
                             
                             if success_report and report_text:
@@ -324,6 +346,9 @@ with st.sidebar:
                                 st.success("レポートを作成しました！")
                             else:
                                 st.error("レポート生成に失敗しました。")
+                                # 修正: エラー詳細を表示して原因特定しやすくする
+                                with st.expander("エラー詳細（デバッグ用）"):
+                                    st.write(error_log)
 
                         except Exception as e:
                             st.error(f"予期せぬエラー: {e}")
@@ -447,21 +472,19 @@ with st.form(key="chat_form", clear_on_submit=True):
             history_for_ai = []
             for m in st.session_state.messages[:-1]:
                 content_str = ""
+                # 修正: コンテンツ取得を安全に
                 if isinstance(m["content"], dict):
-                    content_str = m["content"].get("text", "")
+                    content_str = m["content"].get("text", str(m["content"]))
                 else:
                     content_str = str(m["content"])
                 history_for_ai.append({"role": m["role"], "parts": [content_str]})
 
             # ★要望通り：原本のPRIORITYを守りつつ、エラーハンドリングを強化したロジック★
             PRIORITY_MODELS = [
-                "gemini-3-flash-preview", 
-                "gemini-2.0-flash",       
+                "gemini-2.5-flash", 
                 "gemini-2.0-flash-exp",   
-                "gemini-2.5-flash",       
-                "gemini-3-pro-preview",   
                 "gemini-1.5-pro",
-                "gemini-1.5-flash" # 保険として追加
+                "gemini-1.5-flash"
             ]
             
             ai_text = ""
