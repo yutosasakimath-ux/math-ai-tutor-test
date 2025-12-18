@@ -169,21 +169,37 @@ if st.session_state.user_info is None:
 
     st.markdown("---")
     
+    # ★★★ 変更点：名前もここで登録するように修正 ★★★
     with st.expander("管理者用：新規アカウント作成"):
         admin_pass_input = st.text_input("管理者パスワード", type="password", key="admin_reg_pass")
         if ADMIN_KEY and admin_pass_input == ADMIN_KEY:
             st.info("🔓 管理者モード：新規モニターユーザーを作成します")
             with st.form("admin_signup_form"):
+                new_name_input = st.text_input("生徒のお名前") # 追加：名前入力欄
                 new_email = st.text_input("新規メールアドレス")
                 new_password = st.text_input("新規パスワード")
                 submit_new = st.form_submit_button("アカウントを作成する")
                 
                 if submit_new:
-                    resp = sign_up_with_email(new_email, new_password)
-                    if "error" in resp:
-                        st.error(f"作成失敗: {resp['error']['message']}")
+                    if not new_name_input:
+                        st.error("お名前を入力してください")
                     else:
-                        st.success(f"アカウント作成成功！\nEmail: {new_email}\nPass: {new_password}\n\nこの情報を親御さんに送ってください。")
+                        resp = sign_up_with_email(new_email, new_password)
+                        if "error" in resp:
+                            st.error(f"作成失敗: {resp['error']['message']}")
+                        else:
+                            # アカウント作成成功後、すぐにFirestoreに名前を書き込む
+                            new_uid = resp["localId"]
+                            try:
+                                db.collection("users").document(new_uid).set({
+                                    "name": new_name_input,
+                                    "email": new_email,
+                                    "created_at": firestore.SERVER_TIMESTAMP
+                                })
+                                st.success(f"アカウント作成成功！\n名前: {new_name_input}\nEmail: {new_email}\nPass: {new_password}\n\nこの情報を親御さんに送ってください。")
+                            except Exception as e:
+                                st.error(f"データベース登録エラー: {e}")
+
         elif admin_pass_input:
             st.error("パスワードが違います")
             
@@ -201,6 +217,7 @@ user_ref = db.collection("users").document(user_id)
 if "user_name" not in st.session_state:
     user_doc = user_ref.get()
     if not user_doc.exists:
+        # ドキュメントが無い場合（念の為のフォールバック）
         user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP} 
         user_ref.set(user_data)
         st.session_state.user_name = "ゲスト"
@@ -501,7 +518,7 @@ with st.form(key="chat_form", clear_on_submit=True):
                     PRIORITY_MODELS = [
                         "gemini-3.0-flash-preview", # 復活
                         "gemini-2.5-flash", 
-                        "gemini-2.0-flash-exp",   
+                        "gemini-2.0-flash-exp",    
                         "gemini-1.5-pro",
                         "gemini-1.5-flash"
                     ]
