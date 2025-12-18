@@ -360,7 +360,8 @@ with st.sidebar:
                             ■ 先生からのコメント
                             （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
 
-                           
+                            ■ 保護者様へのアドバイス（今日のお声がけ）
+                            （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
                             --------------------------------------------------
                             """
                             
@@ -564,8 +565,8 @@ with st.form(key="chat_form", clear_on_submit=True):
                     
                     ai_text = ""
                     success_model = None
-                    error_log = []
-
+                    error_details = [] # エラー内容を保存するリスト
+                    
                     for model_name in PRIORITY_MODELS:
                         try:
                             model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
@@ -580,13 +581,22 @@ with st.form(key="chat_form", clear_on_submit=True):
                             success_model = model_name
                             break 
                         except Exception as e:
-                            error_log.append(f"{model_name}: {str(e)}")
+                            # エラーを記録して次のモデルへ
+                            error_details.append(f"⚠️ {model_name} エラー: {e}")
                             continue
                 
                 # 3. AIの処理が終わったら、その「ぐるぐる」が消えて、同じ場所に「解答」が出る
                 if success_model:
                     st.session_state.last_used_model = success_model
                     
+                    # ★★★ デバッグ情報：もし第一希望のモデル(3.0)以外が使われた場合、理由を表示 ★★★
+                    if success_model != PRIORITY_MODELS[0]:
+                        with st.chat_message("assistant"):
+                             st.warning(f"Note: {PRIORITY_MODELS[0]} が利用できなかったため、{success_model} に切り替えました。")
+                             with st.expander("エラー詳細 (デバッグ用)"):
+                                 for err in error_details:
+                                     st.write(err)
+
                     # 結果の保存（表示用）
                     st.session_state.messages.append({
                         "role": "model",
@@ -616,4 +626,4 @@ with st.form(key="chat_form", clear_on_submit=True):
                     time.sleep(0.1) 
                     st.rerun()
                 else:
-                    st.error(f"❌ エラーが発生しました。\n詳細: {error_log}")
+                    st.error(f"❌ エラーが発生しました。\n詳細: {error_details}")
