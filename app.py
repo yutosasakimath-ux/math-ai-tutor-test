@@ -145,6 +145,10 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "messages_loaded" not in st.session_state:
     st.session_state.messages_loaded = False
+    
+# 【ログ機能追加】デバッグログ表示用セッション変数
+if "debug_logs" not in st.session_state:
+    st.session_state.debug_logs = []
 
 # --- 4. UI: ログイン画面（未ログイン時） ---
 if st.session_state.user_info is None:
@@ -249,6 +253,20 @@ with st.sidebar:
     
     st.markdown("---")
 
+    # 【機能追加】デバッグログ表示エリア
+    with st.expander("🛠 デバッグログ (エラー履歴)"):
+        if st.session_state.debug_logs:
+            for i, log in enumerate(reversed(st.session_state.debug_logs)):
+                st.code(log, language="text")
+            
+            if st.button("ログ消去"):
+                st.session_state.debug_logs = []
+                st.rerun()
+        else:
+            st.write("現在エラーログはありません")
+
+    st.markdown("---")
+
     if st.button("🗑️ 会話履歴を全削除"):
         with st.spinner("履歴を保存して削除中..."):
             # 【ログ機能追加 1/2】 削除前に現在の会話をアーカイブ保存する
@@ -291,6 +309,7 @@ with st.sidebar:
             st.session_state.last_report = "" 
             st.session_state.messages = [] 
             st.session_state.messages_loaded = True 
+            st.session_state.debug_logs = [] # 履歴削除時はエラーログも一掃
             st.success("履歴をリセットしました（ログは保存されました）")
             time.sleep(1)
             st.rerun()
@@ -299,6 +318,7 @@ with st.sidebar:
         st.session_state.user_info = None
         st.session_state.messages = []
         st.session_state.messages_loaded = False
+        st.session_state.debug_logs = []
         # ★修正点：ログアウト時に名前キャッシュもクリアする
         if "user_name" in st.session_state:
             del st.session_state["user_name"]
@@ -581,22 +601,31 @@ with st.form(key="chat_form", clear_on_submit=True):
                             success_model = model_name
                             break 
                         except Exception as e:
-                            # エラーを記録して次のモデルへ
-                            error_details.append(f"⚠️ {model_name} エラー: {e}")
+                            # エラー詳細を保存
+                            timestamp_str = datetime.datetime.now().strftime('%H:%M:%S')
+                            log_message = f"[{timestamp_str}] ⚠️ {model_name} エラー: {e}"
+                            error_details.append(log_message)
+                            
+                            # セッションステートにも保存（UI表示用）
+                            st.session_state.debug_logs.append(log_message)
+                            
+                            # 【追加】Firestoreにシステムログとして永続保存
+                            try:
+                                db.collection("system_logs").add({
+                                    "user_id": user_id,
+                                    "timestamp": firestore.SERVER_TIMESTAMP,
+                                    "error_message": str(e),
+                                    "model_attempted": model_name,
+                                    "type": "generation_error"
+                                })
+                            except:
+                                pass # ログ保存のエラーは無視
                             continue
                 
                 # 3. AIの処理が終わったら、その「ぐるぐる」が消えて、同じ場所に「解答」が出る
                 if success_model:
                     st.session_state.last_used_model = success_model
                     
-                    # ★★★ デバッグ情報：もし第一希望のモデル(3.0)以外が使われた場合、理由を表示 ★★★
-                    if success_model != PRIORITY_MODELS[0]:
-                        with st.chat_message("assistant"):
-                             st.warning(f"Note: {PRIORITY_MODELS[0]} が利用できなかったため、{success_model} に切り替えました。")
-                             with st.expander("エラー詳細 (デバッグ用)"):
-                                 for err in error_details:
-                                     st.write(err)
-
                     # 結果の保存（表示用）
                     st.session_state.messages.append({
                         "role": "model",
