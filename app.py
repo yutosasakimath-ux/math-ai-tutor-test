@@ -54,11 +54,11 @@ footer {visibility: hidden;}
     display: flex;
     align-items: center;
     justify-content: center;
-    /* ↓追加：文字を透明にして「Browse files」等を完全に見えなくする */
+    /* 文字を透明にして「Browse files」等を完全に見えなくする */
     color: transparent; 
 }
 
-/* ↓追加：内部のすべての要素（テキストやボタン）を強制的に消す */
+/* 内部のすべての要素（テキストやボタン）を強制的に消す */
 [data-testid="stFileUploader"] section > * {
     display: none !important;
 }
@@ -75,7 +75,7 @@ footer {visibility: hidden;}
 [data-testid="stFileUploader"] ul {
     display: none;
 }
-/* アップロードされた時の状態変化（任意） */
+/* アップロードされた時の状態変化 */
 [data-testid="stFileUploader"]:has(input[type="file"]:valid) section {
     background-color: #e0f7fa;
     border-color: #00bcd4;
@@ -381,15 +381,21 @@ if not st.session_state.messages_loaded:
     st.session_state.messages = loaded_msgs
     st.session_state.messages_loaded = True
 
-# --- チャット履歴の表示 ---
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        content = msg["content"]
-        if isinstance(content, dict):
-            if "text" in content:
-                st.markdown(content["text"])
-        else:
-            st.markdown(content)
+# ★★★ 修正点：チャット履歴と新規メッセージを表示するための「枠（コンテナ）」を作る ★★★
+# これにより、フォーム送信後も、この「枠」の中にメッセージを追加できるので、
+# チャットが途切れず、自然な順序（入力→ぐるぐる→回答）で表示されます。
+chat_log_container = st.container()
+
+with chat_log_container:
+    # --- 過去のチャット履歴の表示 ---
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            content = msg["content"]
+            if isinstance(content, dict):
+                if "text" in content:
+                    st.markdown(content["text"])
+            else:
+                st.markdown(content)
 
 # --- 9. プロンプト定義 ---
 system_instruction = f"""
@@ -418,12 +424,11 @@ system_instruction = f"""
 """
 
 # --- 10. AI応答ロジック ---
-st.write("---") 
+# 区切り線 st.write("---") は削除しました。これにより、チャットと入力欄の隙間がなくなります。
 
 # 画面下部に固定風に見せる物理フォーム配置
 with st.form(key="chat_form", clear_on_submit=True):
     # レイアウト：[カメラアイコン] [テキスト入力] [送信ボタン]
-    # width比率を調整してアイコンを自然に配置
     col1, col2, col3 = st.columns([0.8, 5, 1], gap="small")
     
     with col1:
@@ -471,74 +476,78 @@ with st.form(key="chat_form", clear_on_submit=True):
                 "timestamp": firestore.SERVER_TIMESTAMP
             })
 
-            # ★★★ 修正点：ここで即座にユーザーの入力を画面に表示する ★★★
-            with st.chat_message("user"):
-                st.markdown(user_msg_content)
-                if upload_img_obj:
-                    st.image(upload_img_obj, width=200)
+            # ★★★ 修正点：先ほど作った「チャットの枠（chat_log_container）」の中に表示を入れる ★★★
+            with chat_log_container:
+                # 1. あなたの入力（赤枠～）を即座に表示
+                with st.chat_message("user"):
+                    st.markdown(user_msg_content)
+                    if upload_img_obj:
+                        st.image(upload_img_obj, width=200)
 
-            # AI生成準備
-            genai.configure(api_key=api_key)
-            
-            history_for_ai = []
-            for m in st.session_state.messages[:-1]:
-                content_str = ""
-                if isinstance(m["content"], dict):
-                    content_str = m["content"].get("text", str(m["content"]))
+                # 2. そのすぐ下で「ぐるぐる（思考中）」を回す
+                # これで、あなたの入力のすぐ下でAIが考えているように見えます
+                with st.spinner("AIコーチが思考中..."):
+                    genai.configure(api_key=api_key)
+                    history_for_ai = []
+                    for m in st.session_state.messages[:-1]:
+                        content_str = ""
+                        if isinstance(m["content"], dict):
+                            content_str = m["content"].get("text", str(m["content"]))
+                        else:
+                            content_str = str(m["content"])
+                        history_for_ai.append({"role": m["role"], "parts": [content_str]})
+
+                    PRIORITY_MODELS = [
+                        "gemini-2.5-flash", 
+                        "gemini-2.0-flash-exp",   
+                        "gemini-1.5-pro",
+                        "gemini-1.5-flash"
+                    ]
+                    
+                    ai_text = ""
+                    success_model = None
+                    error_log = []
+
+                    for model_name in PRIORITY_MODELS:
+                        try:
+                            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+                            chat = model.start_chat(history=history_for_ai)
+                            
+                            inputs = [user_prompt]
+                            if upload_img_obj:
+                                inputs.append(upload_img_obj)
+                            
+                            response = chat.send_message(inputs)
+                            ai_text = response.text
+                            success_model = model_name
+                            break 
+                        except Exception as e:
+                            error_log.append(f"{model_name}: {str(e)}")
+                            continue
+                
+                # 3. AIの処理が終わったら、その「ぐるぐる」が消えて、同じ場所に「解答」が出る
+                if success_model:
+                    st.session_state.last_used_model = success_model
+                    
+                    # 結果の保存
+                    st.session_state.messages.append({
+                        "role": "model",
+                        "content": ai_text
+                    })
+                    
+                    user_ref.collection("history").add({
+                        "role": "model",
+                        "content": ai_text,
+                        "timestamp": firestore.SERVER_TIMESTAMP
+                    })
+                    
+                    # AIの回答を表示（ここも chat_log_container の中）
+                    with st.chat_message("model"):
+                        st.markdown(ai_text)
+                    
+                    # 少し待ってからリロードして、正式に履歴として保存・表示
+                    # これにより、一瞬表示されて消える現象を防ぎます
+                    time.sleep(0.1) 
+                    st.rerun()
                 else:
-                    content_str = str(m["content"])
-                history_for_ai.append({"role": m["role"], "parts": [content_str]})
-
-            PRIORITY_MODELS = [
-                "gemini-2.5-flash", 
-                "gemini-2.0-flash-exp",   
-                "gemini-1.5-pro",
-                "gemini-1.5-flash"
-            ]
-            
-            ai_text = ""
-            success_model = None
-            error_log = []
-
-            # ★★★ 修正点：ユーザー入力が表示された後にスピナーが回る ★★★
-            with st.spinner("AIコーチが思考中..."):
-                for model_name in PRIORITY_MODELS:
-                    try:
-                        model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-                        chat = model.start_chat(history=history_for_ai)
-                        
-                        inputs = [user_prompt]
-                        if upload_img_obj:
-                            inputs.append(upload_img_obj)
-                        
-                        response = chat.send_message(inputs)
-                        ai_text = response.text
-                        success_model = model_name
-                        break 
-                    except Exception as e:
-                        error_log.append(f"{model_name}: {str(e)}")
-                        continue
-
-            if success_model:
-                st.session_state.last_used_model = success_model
-                
-                # 結果の保存
-                st.session_state.messages.append({
-                    "role": "model",
-                    "content": ai_text
-                })
-                
-                user_ref.collection("history").add({
-                    "role": "model",
-                    "content": ai_text,
-                    "timestamp": firestore.SERVER_TIMESTAMP
-                })
-                
-                # ★★★ 修正点：rerunの直前にAIの回答も一応表示しておく（ちらつき防止） ★★★
-                with st.chat_message("model"):
-                    st.markdown(ai_text)
-                
-                # フォームをクリアして最新状態にするためにリロード
-                st.rerun()
-            else:
-                st.error(f"❌ エラーが発生しました。\n詳細: {error_log}")
+                    st.error(f"❌ エラーが発生しました。\n詳細: {error_log}")
