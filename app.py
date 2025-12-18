@@ -6,26 +6,53 @@ import requests
 import json
 import datetime
 import time
-from PIL import Image # 画像処理用に追加
+from PIL import Image
 
 # --- 0. 設定と定数 ---
-# initial_sidebar_state="expanded" を追加し、PCでは最初からサイドバーを開くように設定
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
 
-# ★★★ UI設定：スマホ対応・修正版 ★★★
+# ★★★ UI設定：スマホ対応・入力フォームの最適化 ★★★
 hide_streamlit_style = """
 <style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 .stDeployButton {display:none;}
-/* 画像アップローダーの見た目を少し調整 */
-.stFileUploader {padding-bottom: 10px;}
+
+/* 入力フォーム周りの余白調整 */
+[data-testid="stForm"] {
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    padding: 10px;
+    position: fixed; /* 簡易的な下部固定（スマホでの挙動はブラウザによる） */
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: white;
+    z-index: 999;
+    margin: 0 auto;
+    max-width: 700px; /* layout="centered"に合わせる */
+}
+/* メインコンテンツがフォームに隠れないように余白を開ける */
+.main .block-container {
+    padding-bottom: 150px; 
+}
+
+/* 画像アップローダーをコンパクトにする */
+[data-testid="stFileUploader"] {
+    padding-top: 0px;
+}
+[data-testid="stFileUploader"] section {
+    padding: 0px;
+    min-height: 0px;
+}
+[data-testid="stFileUploader"] img {
+    display: none; /* デフォルトのアイコンを消すなど */
+}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # --- 1. Firebase初期化 ---
-# 管理者用パスワード
 if "ADMIN_KEY" in st.secrets:
     ADMIN_KEY = st.secrets["ADMIN_KEY"]
 else:
@@ -34,20 +61,17 @@ else:
 if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
 else:
-    # 開発用ダミー（動作しません）
     FIREBASE_WEB_API_KEY = "API_KEY_NOT_SET"
 
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
             key_dict = dict(st.secrets["firebase"])
-            # private_keyの改行コード対応
             if "\\n" in key_dict["private_key"]:
                 key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
         else:
-            # ローカル開発用
             cred = credentials.Certificate("service_account.json")
             firebase_admin.initialize_app(cred)
     except Exception as e:
@@ -76,6 +100,12 @@ if "last_used_model" not in st.session_state:
     st.session_state.last_used_model = "まだ回答していません"
 if "last_report" not in st.session_state:
     st.session_state.last_report = ""
+
+# ★重要修正：Firestore読み込みコスト削減のためのキャッシュ★
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "messages_loaded" not in st.session_state:
+    st.session_state.messages_loaded = False
 
 # --- 4. UI: ログイン画面（未ログイン時） ---
 if st.session_state.user_info is None:
@@ -127,17 +157,20 @@ if st.session_state.user_info is None:
 user_id = st.session_state.user_info["uid"]
 user_email = st.session_state.user_info["email"]
 
-# --- 5. Firestoreからユーザーデータ取得 ---
+# --- 5. Firestoreからユーザーデータ取得（基本情報） ---
 user_ref = db.collection("users").document(user_id)
-user_doc = user_ref.get()
+# ユーザー名の取得もキャッシュする（Read削減）
+if "user_name" not in st.session_state:
+    user_doc = user_ref.get()
+    if not user_doc.exists:
+        user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP} 
+        user_ref.set(user_data)
+        st.session_state.user_name = "ゲスト"
+    else:
+        user_data = user_doc.to_dict()
+        st.session_state.user_name = user_data.get("name", "ゲスト")
 
-if not user_doc.exists:
-    user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP} 
-    user_ref.set(user_data)
-    student_name = "ゲスト"
-else:
-    user_data = user_doc.to_dict()
-    student_name = user_data.get("name", "ゲスト")
+student_name = st.session_state.user_name
 
 api_key = ""
 if "GEMINI_API_KEY" in st.secrets:
@@ -149,6 +182,7 @@ with st.sidebar:
     new_name = st.text_input("お名前", value=student_name)
     if new_name != student_name:
         user_ref.update({"name": new_name})
+        st.session_state.user_name = new_name
         st.rerun()
     
     st.markdown("---")
@@ -168,6 +202,8 @@ with st.sidebar:
             if count > 0:
                 batch.commit()
         st.session_state.last_report = "" 
+        st.session_state.messages = [] # キャッシュもクリア
+        st.session_state.messages_loaded = True # ロード済み状態にする（空なので）
         st.success("履歴をリセットしました")
         time.sleep(1)
         st.rerun()
@@ -175,6 +211,7 @@ with st.sidebar:
     if st.button("ログアウト"):
         st.session_state.user_info = None
         st.session_state.messages = []
+        st.session_state.messages_loaded = False
         st.rerun()
 
     st.markdown("---")
@@ -199,21 +236,14 @@ with st.sidebar:
         if ADMIN_KEY and report_admin_pass == ADMIN_KEY:
             st.info("🔓 レポート作成モード")
             
-            history_ref = user_ref.collection("history").order_by("timestamp")
-            docs = history_ref.stream()
-            messages_for_report = []
-            for doc in docs:
-                messages_for_report.append(doc.to_dict())
-
             if st.button("📝 今日のレポートを作成"):
-                if not messages_for_report:
+                if not st.session_state.messages:
                     st.warning("学習履歴がありません。")
                 elif not api_key:
                     st.error("APIキー設定エラー")
                 else:
                     with st.spinner("会話ログを分析中..."):
                         try:
-                            # レポート用プロンプト（省略せず記述）
                             report_system_instruction = f"""
                             あなたは学習塾の「保護者への報告担当者」です。
                             生徒名は「{new_name}」さんです。
@@ -234,13 +264,13 @@ with st.sidebar:
                             """
                             
                             conversation_text = ""
-                            for m in messages_for_report[-20:]: 
+                            # セッションステートから履歴を取得（最新20件）
+                            for m in st.session_state.messages[-20:]: 
                                 role_name = "先生" if m["role"] == "model" else "生徒"
                                 content_text = m["content"].get("text", "") if isinstance(m["content"], dict) else str(m["content"])
                                 conversation_text += f"{role_name}: {content_text}\n"
 
                             genai.configure(api_key=api_key)
-                            # レポートは高速なFlashモデルを優先
                             report_model_name = "gemini-1.5-flash" 
                             report_model = genai.GenerativeModel(report_model_name, system_instruction=report_system_instruction)
                             response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
@@ -257,36 +287,25 @@ with st.sidebar:
 st.title("🎓 高校数学 AI専属コーチ")
 st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
 
-# チャット履歴の表示
-history_ref = user_ref.collection("history").order_by("timestamp")
-docs = history_ref.stream()
-messages = []
-for doc in docs:
-    messages.append(doc.to_dict())
+# --- ★重要：Firestore履歴の初回ロードのみ実行（コスト対策） ---
+if not st.session_state.messages_loaded:
+    history_ref = user_ref.collection("history").order_by("timestamp")
+    docs = history_ref.stream()
+    loaded_msgs = []
+    for doc in docs:
+        loaded_msgs.append(doc.to_dict())
+    st.session_state.messages = loaded_msgs
+    st.session_state.messages_loaded = True
 
-for msg in messages:
+# --- チャット履歴の表示（セッションステートから） ---
+for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         content = msg["content"]
-        # Firestoreには画像パスを保存していないためテキストのみ表示
         if isinstance(content, dict):
             if "text" in content:
                 st.markdown(content["text"])
         else:
             st.markdown(content)
-
-# --- ★★★ 画像アップロード機能（位置変更：会話ログの下へ） ★★★ ---
-st.write("") # 履歴との間に少し余白を入れる
-with st.expander("📸 数式の写真をアップロード（ここをタップ）", expanded=False):
-    st.caption("ノートや教科書の写真を撮ってアップロードしてください。")
-    uploaded_file = st.file_uploader("画像を選択", type=["jpg", "jpeg", "png", "webp"])
-    
-    uploaded_image = None
-    if uploaded_file is not None:
-        try:
-            uploaded_image = Image.open(uploaded_file)
-            st.image(uploaded_image, caption="送信する画像", width=250)
-        except Exception as e:
-            st.error("画像の読み込みに失敗しました。別の画像を試してください。")
 
 # --- 9. プロンプト定義 ---
 system_instruction = f"""
@@ -299,118 +318,114 @@ system_instruction = f"""
 2. 読み取った内容をもとに、生徒がどこで詰まっているかを分析してください。
 3. もし画像が不鮮明で読めない場合は、「文字が少し読みづらいです。もう少し明るい場所で撮り直すか、どんな問題か教えてくれますか？」と優しく返してください。
 
-【あなたの絶対的な使命】
-生徒が「自力で答えに辿り着く」ことを支援すること。
-答えを教えることは、生徒の学習機会を奪う「罪」だと認識してください。
-
 【指導ガイドライン】
 1. **回答の禁止**: どんなに求められても、最終的な答えや数式を直接提示してはいけません。
-2. **現状分析**: 生徒がどこまで分かっているかを特定してください。
-3. **問いかけ**: 次に進むための「小さなヒント」を出してください。
-4. **アウトプットの要求**: 「ここまでで、どう思いますか？」と最後に聞いてください。
-5. **数式**: LaTeX形式（$マーク）を使ってきれいに表示してください。
+2. **問いかけ重視**: いきなり解説せず、「まずはどこまで分かった？」「この式変形はどうなると思う？」と問いかけてください。
+3. **数式**: LaTeX形式（$マーク）を使ってきれいに表示してください。
 """
 
 # --- 10. AI応答ロジック ---
-# チャット入力
-if prompt := st.chat_input("質問を入力してください...（画像がある場合は先にアップロード）"):
-    if not api_key:
-        st.warning("サイドバーでGemini APIキーを設定してください。")
-        st.stop()
+# ★★★ UI変更：チャットログの下に「画像＋テキスト＋送信」のフォームを配置 ★★★
 
-    # ユーザーの入力を表示
-    with st.chat_message("user"):
-        st.markdown(prompt)
-        # 今回のターンだけ画像を表示
-        if uploaded_image:
-            st.image(uploaded_image, width=200)
+st.write("---") # 区切り線
 
-    # Firestoreへ保存（画像データは容量削減のため保存せず、テキストで代替）
-    user_msg_content = prompt
-    if uploaded_image:
-        user_msg_content += "\n\n(※画像を送信しました)"
+# 画面下部に固定風に見せるための余白調整などはCSSで行っているが、
+# ここでは物理的にフォームを配置する。
+with st.form(key="chat_form", clear_on_submit=True):
+    # レイアウト：[カメラ(画像)] [テキスト入力] [送信ボタン]
+    # width比率を調整してそれっぽく見せる
+    col1, col2, col3 = st.columns([1, 4, 1], gap="small")
     
-    user_ref.collection("history").add({
-        "role": "user",
-        "content": user_msg_content,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
-
-    genai.configure(api_key=api_key)
+    with col1:
+        # 画像アップローダー（ラベルを消してコンパクトに）
+        uploaded_file = st.file_uploader("📸", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed")
     
-    # 過去の履歴をテキストのみで構築（画像は今回のターンのみ使用）
-    history_for_ai = []
-    for m in messages:
-        content_str = ""
-        if isinstance(m["content"], dict):
-            content_str = m["content"].get("text", "")
+    with col2:
+        # テキストエリア（高さを抑える）
+        user_prompt = st.text_area("質問", placeholder="質問を入力...", height=68, label_visibility="collapsed")
+        
+    with col3:
+        # 送信ボタン（テキストエリアの高さに合うように少しCSSハックが必要だが、まずは配置）
+        st.write("") # 空行で位置調整
+        submitted = st.form_submit_button("送信")
+
+    # --- 送信処理 ---
+    if submitted:
+        if not user_prompt and not uploaded_file:
+            st.warning("質問か画像を入力してください")
+        elif not api_key:
+            st.warning("サイドバーでGemini APIキーを設定してください。")
         else:
-            content_str = str(m["content"])
-        history_for_ai.append({"role": m["role"], "parts": [content_str]})
+            # 画像処理
+            upload_img_obj = None
+            user_msg_content = user_prompt
+            
+            if uploaded_file:
+                try:
+                    upload_img_obj = Image.open(uploaded_file)
+                    user_msg_content += "\n\n(※画像を送信しました)"
+                except Exception as e:
+                    st.error("画像エラー")
 
-    response_text = ""
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        
-        # モデルリスト（マルチモーダル対応のモデルを優先）
-        PRIORITY_MODELS = [
-            "gemini-2.0-flash",        # 高速・高性能
-            "gemini-1.5-flash",        # 安定・安価
-            "gemini-1.5-pro",          # 高精度
-            "gemini-2.0-flash-exp"     # 実験的
-        ]
-        
-        success = False
-        active_model = None
-        
-        def try_generate(model_name):
-            full_model_name = f"models/{model_name}" if not model_name.startswith("models/") else model_name
-            retry_model = genai.GenerativeModel(full_model_name, system_instruction=system_instruction)
+            # 1. ユーザーのメッセージをセッションステートに追加（即時表示用）
+            st.session_state.messages.append({
+                "role": "user",
+                "content": user_msg_content
+            })
             
-            # チャットセッションを開始
-            chat = retry_model.start_chat(history=history_for_ai)
-            
-            # 入力データを作成（テキスト + 画像があれば画像も）
-            inputs = [prompt]
-            if uploaded_image:
-                inputs.append(uploaded_image)
-            
-            # ストリーミング送信
-            return chat.send_message(inputs, stream=True)
+            # 2. Firestoreへ保存（非同期っぽく振る舞うため、表示後に保存してもよいが安全のためここで）
+            user_ref.collection("history").add({
+                "role": "user",
+                "content": user_msg_content,
+                "timestamp": firestore.SERVER_TIMESTAMP
+            })
 
-        # モデルローテーション実行
-        for model_name in PRIORITY_MODELS:
+            # リランしてユーザーのメッセージを表示（フォーム送信後はリランされるが、念のため）
+            # ここではリランせず、そのままAI生成に進むことでUXを向上させる
+            
+            # 3. AI生成準備
+            genai.configure(api_key=api_key)
+            
+            # 履歴の構築（画像は今回のターンのみ）
+            history_for_ai = []
+            # 最新のユーザーメッセージ以外の過去ログを入れる
+            for m in st.session_state.messages[:-1]:
+                content_str = ""
+                if isinstance(m["content"], dict):
+                    content_str = m["content"].get("text", "")
+                else:
+                    content_str = str(m["content"])
+                history_for_ai.append({"role": m["role"], "parts": [content_str]})
+
+            # 4. AI生成実行
             try:
-                response = try_generate(model_name)
-                full_res = ""
-                for chunk in response:
-                    if chunk.text:
-                        full_res += chunk.text
-                        placeholder.markdown(full_res)
-                
-                response_text = full_res
-                success = True
-                active_model = model_name
-                break
-            except Exception as e:
-                # エラー時は次のモデルへ
-                # print(f"Model {model_name} failed: {e}") # デバッグ用
-                continue
-        
-        if not success:
-            st.error("❌ 申し訳ありません。現在アクセスが集中しているか、画像が処理できませんでした。もう一度お試しください。")
-            st.stop()
+                # ユーザーメッセージの直下にAIの思考中を表示したいが、
+                # フォーム送信後は一度リロードされる仕様のため、st.spinnerを使う
+                with st.spinner("AIコーチが思考中..."):
+                    model = genai.GenerativeModel("models/gemini-1.5-flash", system_instruction=system_instruction)
+                    chat = model.start_chat(history=history_for_ai)
+                    
+                    inputs = [user_prompt]
+                    if upload_img_obj:
+                        inputs.append(upload_img_obj)
+                    
+                    response = chat.send_message(inputs)
+                    ai_text = response.text
 
-    st.session_state.last_used_model = active_model
-    
-    # AIの返答をFirestoreに保存
-    user_ref.collection("history").add({
-        "role": "model",
-        "content": response_text,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
-    
-    # 画像をアップロードしたままリランすると次回も送信されてしまうため、
-    # 本来はuploaderをクリアしたいが、Streamlitの仕様上難しいため、
-    # そのままリランする（ユーザーには手動で×を押してもらう運用）
-    st.rerun()
+                # 5. 結果の保存と表示
+                st.session_state.messages.append({
+                    "role": "model",
+                    "content": ai_text
+                })
+                
+                user_ref.collection("history").add({
+                    "role": "model",
+                    "content": ai_text,
+                    "timestamp": firestore.SERVER_TIMESTAMP
+                })
+                
+                # 画面更新（これで新しいメッセージが表示される）
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"エラーが発生しました: {e}")
