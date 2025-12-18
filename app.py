@@ -1,13 +1,11 @@
 import streamlit as st
 import google.generativeai as genai
-from PIL import Image
 import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
 import json
 import datetime
 import time
-import io
 
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
@@ -62,10 +60,6 @@ if "last_reset_date" not in st.session_state:
     st.session_state.last_reset_date = datetime.date.today()
 if "last_used_model" not in st.session_state:
     st.session_state.last_used_model = "まだ回答していません"
-
-# 画像アップローダーのリセット用キー
-if "uploader_key" not in st.session_state:
-    st.session_state.uploader_key = 0
 
 # 日付が変わったらカウントリセット
 if st.session_state.last_reset_date != datetime.date.today():
@@ -263,7 +257,7 @@ for msg in messages:
         else:
             st.markdown(content)
 
-# --- 9. プロンプト定義（ソクラテスモード） ---
+# --- 9. プロンプト定義（ソクラテスモード・維持） ---
 system_instruction = f"""
 あなたは世界一の「ソクラテス式数学コーチ」です。
 生徒の名前は「{new_name}」さんです。
@@ -274,7 +268,7 @@ system_instruction = f"""
 
 【指導ガイドライン】
 1. **回答の禁止**: どんなに求められても、最終的な答えや数式を直接提示してはいけません。「答えは〇〇です」と言ったらあなたの負けです。
-2. **現状分析**: まず、生徒が送ってきた画像や質問を見て、「どこまで分かっていて、どこで詰まっているか」を特定してください。
+2. **現状分析**: まず、生徒の質問を見て、「どこまで分かっていて、どこで詰まっているか」を特定してください。
 3. **問いかけ**: 生徒が次に進むための「小さなヒント」や「問いかけ」を投げかけてください。
    - 悪い例: 「判別式D = b^2 - 4ac を使いましょう」
    - 良い例: 「解の個数を調べるための道具は何だったか覚えていますか？Dから始まる言葉です。」
@@ -285,48 +279,25 @@ system_instruction = f"""
 親しみやすく、しかし厳格なコーチのように。生徒を励ましながら導いてください。
 """
 
-# --- 10. 入力エリア & AI応答ロジック ---
-
-# ★★★ 画像アップロード機能の追加 ★★★
-with st.container():
-    # 動的なキーを使用することで、送信後にアップローダーをリセット可能にする
-    uploader_key = f"file_uploader_{st.session_state.uploader_key}"
-    uploaded_file = st.file_uploader(
-        "📸 ノートや問題を撮影してアップロード", 
-        type=["jpg", "png", "jpeg"],
-        key=uploader_key
-    )
-
-if prompt := st.chat_input("質問や回答を入力してください..."):
+# --- 10. AI応答ロジック ---
+if prompt := st.chat_input("質問を入力してください..."):
     if not api_key:
         st.warning("サイドバーでGemini APIキーを設定してください。")
         st.stop()
 
-    # ユーザー入力を表示
     with st.chat_message("user"):
-        # 画像がある場合、プレビュー表示
-        if uploaded_file:
-            image_data = Image.open(uploaded_file)
-            st.image(image_data, caption="アップロードされたノート/問題", use_column_width=True)
-            st.markdown(prompt)
-            # 履歴に保存するためのログ（画像バイナリはDB容量圧迫するため、今回はテキストマーカーのみ保存）
-            save_content = f"[画像が送信されました] {prompt}"
-        else:
-            st.markdown(prompt)
-            save_content = prompt
-
+        st.markdown(prompt)
+    
     # Firestoreに保存
     user_ref.collection("history").add({
         "role": "user",
-        "content": save_content,
+        "content": prompt,
         "timestamp": firestore.SERVER_TIMESTAMP
     })
 
-    # Gemini設定
     genai.configure(api_key=api_key)
     
-    # 履歴の構築（過去の画像はテキストとして扱う簡易実装）
-    # ※ 本格実装ではCloud Storageに画像を置き、履歴に画像URLを含める必要があります
+    # 履歴の構築
     history_for_ai = []
     for m in messages:
         content_str = ""
@@ -340,10 +311,11 @@ if prompt := st.chat_input("質問や回答を入力してください..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
+        # 安定性を最優先したモデルリスト
         PRIORITY_MODELS = [
-            "gemini-2.0-flash",       # 最新・画像認識に強い
-            "gemini-1.5-flash",       # バックアップ
-            "gemini-1.5-pro"          # 高精度バックアップ
+            "gemini-1.5-flash",       # 最も安定・高速
+            "gemini-2.0-flash-exp",   # 最新（もし1.5がダメな場合）
+            "gemini-1.5-pro"          # 高性能バックアップ
         ]
         
         PRO_LIMIT_PER_DAY = 15 
@@ -356,21 +328,9 @@ if prompt := st.chat_input("質問や回答を入力してください..."):
             full_model_name = f"models/{model_name}" if not model_name.startswith("models/") else model_name
             retry_model = genai.GenerativeModel(full_model_name, system_instruction=system_instruction)
             
-            # ★★★ 画像がある場合とない場合でAPI呼び出しを分ける ★★★
-            if uploaded_file:
-                # 画像がある場合：チャット履歴を含めず、今回だけのマルチモーダル入力として処理
-                # (Streamlitの仕様上、履歴内の過去画像を再送するのは複雑なため、今回は「今の画像」に集中させる)
-                img = Image.open(uploaded_file)
-                # 履歴情報をテキストコンテキストとしてプロンプトに付与
-                context_prompt = "【これまでの会話の流れ】\n" + "\n".join([f"{h['role']}: {h['parts'][0]}" for h in history_for_ai[-5:]]) # 直近5件
-                context_prompt += f"\n\n【今回の生徒の入力】\n{prompt}"
-                
-                # generate_contentを使用（ChatSessionではなく単発生成）
-                return retry_model.generate_content([context_prompt, img], stream=True)
-            else:
-                # 画像がない場合：通常のチャットセッション
-                chat = retry_model.start_chat(history=history_for_ai)
-                return chat.send_message(prompt, stream=True)
+            # 通常のチャットセッション
+            chat = retry_model.start_chat(history=history_for_ai)
+            return chat.send_message(prompt, stream=True)
 
         for model_name in PRIORITY_MODELS:
             if "pro" in model_name and st.session_state.pro_usage_count >= PRO_LIMIT_PER_DAY:
@@ -394,10 +354,11 @@ if prompt := st.chat_input("質問や回答を入力してください..."):
             except Exception as e:
                 # エラーログ（デバッグ用）
                 print(f"Model {model_name} failed: {e}")
+                # ユーザーにはまだエラーを見せず、次のモデルをトライさせる
                 continue
         
         if not success:
-            st.error("❌ 現在アクセスが集中しており応答できません。")
+            st.error("❌ 現在アクセスが集中しており応答できません。しばらく待ってから再試行してください。")
             st.stop()
 
     st.session_state.last_used_model = active_model
@@ -407,7 +368,4 @@ if prompt := st.chat_input("質問や回答を入力してください..."):
         "timestamp": firestore.SERVER_TIMESTAMP
     })
     
-    # ★★★ 送信完了後にアップローダーをリセット ★★★
-    if uploaded_file:
-        st.session_state.uploader_key += 1
     st.rerun()
