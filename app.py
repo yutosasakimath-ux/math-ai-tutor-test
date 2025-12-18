@@ -11,8 +11,8 @@ import time
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
-# ★ Stripeの商品ID
-STRIPE_PRICE_ID = "price_1SdhxIQpLmU93uYCGce6dPni"
+# ★ Stripeの商品ID（あなたの環境のもの）
+STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
@@ -108,12 +108,11 @@ if st.session_state.user_info is None:
 user_id = st.session_state.user_info["uid"]
 user_email = st.session_state.user_info["email"]
 
-# --- 5. ユーザー情報とプラン確認（設定ミス対応版）---
-# まず 'users' コレクションを探す
+# --- 5. ユーザー情報とプラン確認 ---
 user_ref = db.collection("users").document(user_id)
 user_doc = user_ref.get()
 
-# もしなければ 'customers' も探してみる（設定ミスの救済措置）
+# 救済措置：customersも探す
 if not user_doc.exists:
     fallback_ref = db.collection("customers").document(user_id)
     if fallback_ref.get().exists:
@@ -135,7 +134,7 @@ active_subs = subs_ref.where("status", "in", ["active", "trialing"]).get()
 if len(active_subs) > 0:
     current_plan = "premium"
 
-# --- 6. サイドバー（改良版：タイムアウト延長・エラー表示） ---
+# --- 6. サイドバー ---
 with st.sidebar:
     st.header(f"ようこそ")
     new_name = st.text_input("お名前", value=student_name)
@@ -152,22 +151,21 @@ with st.sidebar:
         st.info("🥚 無料プラン")
         st.write("プレミアムにアップグレードして\n学習を加速させよう！")
         
-        # 課金URL発行ボタン（改良版）
         if st.button("👉 プレミアムに登録 (¥1,980/月)"):
             with st.spinner("決済システムに接続中...（初回は30秒ほどかかります）"):
                 # 1. 注文書を作成
                 doc_ref = user_ref.collection("checkout_sessions").add({
                     "price": STRIPE_PRICE_ID,
-                    "success_url": "https://math-ai-tutor.streamlit.app/",
-                    "cancel_url": "https://math-ai-tutor.streamlit.app/",
+                    "success_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
+                    "cancel_url": "https://math-ai-tutor-test-n8dyekhp6yjmcpa2qei7sg.streamlit.app/",
                 })
                 session_id = doc_ref[1].id
                 
-                # 2. URL生成待ち（60秒に延長）
+                # 2. URL生成待ち
                 checkout_url = None
                 error_msg = None
                 
-                for i in range(60): # 1秒 x 60回 = 60秒待機
+                for i in range(60):
                     time.sleep(1)
                     session_doc = user_ref.collection("checkout_sessions").document(session_id).get()
                     
@@ -180,13 +178,12 @@ with st.sidebar:
                             error_msg = data["error"]["message"]
                             break
                 
-                # 3. 結果表示
                 if checkout_url:
                     st.link_button("💳 お支払い画面へ進む", checkout_url)
                 elif error_msg:
                     st.error(f"エラー: {error_msg}")
                 else:
-                    st.error("⚠️ タイムアウトしました。\n拡張機能の設定でコレクション名が 'users' になっているか確認してください。")
+                    st.error("⚠️ タイムアウトしました。")
                     
     st.markdown("---")
     
@@ -197,10 +194,16 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("🛠️ 開発者用デバッグ情報")
-    if "pro" in st.session_state.last_used_model:
-        st.error(f"Last Model: {st.session_state.last_used_model}")
+    
+    # モデル名の表示色分け
+    model_display = st.session_state.last_used_model
+    if "3.0" in str(model_display):
+        st.success(f"🚀 {model_display} (最新版)")
+    elif "pro" in str(model_display):
+        st.warning(f"💎 {model_display} (Pro)")
     else:
-        st.success(f"Last Model: {st.session_state.last_used_model}")
+        st.info(f"⚡ {model_display}")
+        
     st.write(f"Pro Count: {st.session_state.pro_usage_count} / 15")
 
     api_key = ""
@@ -247,7 +250,7 @@ system_instruction = f"""
 問題を読み取り、方針のヒントを出してください。
 """
 
-# --- 10. AI応答ロジック（リミッター付き統合版） ---
+# --- 10. AI応答ロジック（Gemini 3.0 Flash対応） ---
 if prompt := st.chat_input("質問を入力してください..."):
     if not api_key:
         st.warning("サイドバーでGemini APIキーを設定してください。")
@@ -276,10 +279,13 @@ if prompt := st.chat_input("質問を入力してください..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
+        # ★★★ ここが最強の布陣です ★★★
         PRIORITY_MODELS = [
-            "gemini-2.5-flash",       # メイン
-            "gemini-1.5-pro",         # バックアップ
-            "gemini-2.0-flash"        # 予備
+            "gemini-3.0-flash-exp",   # 1. 最新の実験モデル（あれば使う）
+            "gemini-3.0-flash",       # 2. 最新の安定版（あれば使う）
+            "gemini-2.5-flash",       # 3. 従来のメイン（確実に動く）
+            "gemini-1.5-pro",         # 4. 賢いバックアップ
+            "gemini-2.0-flash"        # 5. 予備
         ]
         
         PRO_LIMIT_PER_DAY = 15 
@@ -314,30 +320,6 @@ if prompt := st.chat_input("質問を入力してください..."):
             except:
                 continue
         
-        if not success:
-            if st.session_state.pro_usage_count >= PRO_LIMIT_PER_DAY:
-                st.warning("⚠️ 本日の「Proモード」上限に達しました。")
-            
-            try:
-                fetched_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                for model_name in fetched_models:
-                    if "pro" not in model_name:
-                        try:
-                            response = try_generate(model_name)
-                            full_res = ""
-                            for chunk in response:
-                                if chunk.text:
-                                    full_res += chunk.text
-                                    placeholder.markdown(full_res)
-                            response_text = full_res
-                            success = True
-                            active_model = model_name
-                            break
-                        except:
-                            continue
-            except:
-                pass
-
         if not success:
             st.error("❌ 現在アクセスが集中しており応答できません。")
             st.stop()
