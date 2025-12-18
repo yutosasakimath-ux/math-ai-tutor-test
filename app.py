@@ -8,23 +8,31 @@ import datetime
 import time
 
 # --- 0. 設定と定数 ---
-st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
+# initial_sidebar_state="expanded" を追加し、PCでは最初からサイドバーを開くように設定
+st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
 
-# ★★★ UI設定：メニューバー、フッター、GitHubリンク等を隠すCSS（追加部分） ★★★
+# ★★★ UI設定：スマホ対応版 ★★★
+# headerを隠すとスマホでサイドバーが開けなくなるため、headerは表示しつつ、
+# 右上のメニュー(#MainMenu)とデプロイボタン(.stDeployButton)だけを隠します。
 hide_streamlit_style = """
-            <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
-            .stDeployButton {display:none;}
-            </style>
-            """
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.stDeployButton {display:none;}
+[data-testid="stToolbar"] {visibility: hidden;}
+</style>
+"""
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # テスト期間中は全員プレミアムなのでStripe IDは使いませんが、コード互換性のため残します
 STRIPE_PRICE_ID = "price_1SdhxlQpLmU93uYCGce6dPni"
-# ★管理者用パスワード（新規登録やデータ閲覧に使用）
-ADMIN_KEY = st.secrets["ADMIN_KEY"]
+
+# ★管理者用パスワード
+# GitHub上でパスワードが見えないよう、Secretsから読み込みます
+if "ADMIN_KEY" in st.secrets:
+    ADMIN_KEY = st.secrets["ADMIN_KEY"]
+else:
+    ADMIN_KEY = None
 
 if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
@@ -97,7 +105,8 @@ if st.session_state.user_info is None:
     # 管理者だけが開ける「新規登録」メニュー
     with st.expander("管理者用：新規アカウント作成"):
         admin_pass_input = st.text_input("管理者パスワード", type="password", key="admin_reg_pass")
-        if admin_pass_input == ADMIN_KEY:
+        # ADMIN_KEYがNoneの場合は一致しないので安全
+        if ADMIN_KEY and admin_pass_input == ADMIN_KEY:
             st.info("🔓 管理者モード：新規モニターユーザーを作成します")
             with st.form("admin_signup_form"):
                 new_email = st.text_input("新規メールアドレス")
@@ -208,7 +217,8 @@ with st.sidebar:
     with st.expander("管理者用：保護者レポート作成"):
         report_admin_pass = st.text_input("管理者パスワード", type="password", key="report_admin_pass")
         
-        if report_admin_pass == ADMIN_KEY:
+        # ADMIN_KEYがNoneの場合は機能しないので安全
+        if ADMIN_KEY and report_admin_pass == ADMIN_KEY:
             st.info("🔓 レポート作成モード")
             
             # チャット履歴読み込み（レポート用）
@@ -298,7 +308,7 @@ with st.sidebar:
 st.title("🎓 高校数学 AI専属コーチ")
 st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
 
-# メイン表示用の履歴読み込み（全員に表示するため再取得）
+# メイン表示用の履歴読み込み
 history_ref = user_ref.collection("history").order_by("timestamp")
 docs = history_ref.stream()
 messages = []
