@@ -11,19 +11,20 @@ from PIL import Image
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
 
-# ★★★ UI設定：スマホ対応・入力フォームの最適化 ★★★
+# ★★★ UI設定：スマホ対応・入力フォームの最適化（修正版） ★★★
+# 修正点：.main [data-testid="stForm"] とすることで、サイドバーのフォームへの影響を除外
 hide_streamlit_style = """
 <style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 .stDeployButton {display:none;}
 
-/* 入力フォーム周りの余白調整 */
-[data-testid="stForm"] {
+/* チャット用フォーム（メインエリアにあるフォームのみ）を下部に固定 */
+.main [data-testid="stForm"] {
     border: 1px solid #ddd;
     border-radius: 10px;
     padding: 10px;
-    position: fixed; /* 簡易的な下部固定（スマホでの挙動はブラウザによる） */
+    position: fixed; /* 簡易的な下部固定 */
     bottom: 0;
     left: 0;
     right: 0;
@@ -32,6 +33,7 @@ footer {visibility: hidden;}
     margin: 0 auto;
     max-width: 700px; /* layout="centered"に合わせる */
 }
+
 /* メインコンテンツがフォームに隠れないように余白を開ける */
 .main .block-container {
     padding-bottom: 150px; 
