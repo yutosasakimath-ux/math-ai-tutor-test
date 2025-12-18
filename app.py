@@ -257,19 +257,6 @@ with st.sidebar:
 st.title("🎓 高校数学 AI専属コーチ")
 st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
 
-# --- ★★★ 画像アップロード機能（ここを追加） ★★★ ---
-with st.expander("📸 数式の写真をアップロード（ここをタップ）", expanded=False):
-    st.caption("ノートや教科書の写真を撮ってアップロードしてください。")
-    uploaded_file = st.file_uploader("画像を選択", type=["jpg", "jpeg", "png", "webp"])
-    
-    uploaded_image = None
-    if uploaded_file is not None:
-        try:
-            uploaded_image = Image.open(uploaded_file)
-            st.image(uploaded_image, caption="送信する画像", width=250)
-        except Exception as e:
-            st.error("画像の読み込みに失敗しました。別の画像を試してください。")
-
 # チャット履歴の表示
 history_ref = user_ref.collection("history").order_by("timestamp")
 docs = history_ref.stream()
@@ -286,6 +273,20 @@ for msg in messages:
                 st.markdown(content["text"])
         else:
             st.markdown(content)
+
+# --- ★★★ 画像アップロード機能（位置変更：会話ログの下へ） ★★★ ---
+st.write("") # 履歴との間に少し余白を入れる
+with st.expander("📸 数式の写真をアップロード（ここをタップ）", expanded=False):
+    st.caption("ノートや教科書の写真を撮ってアップロードしてください。")
+    uploaded_file = st.file_uploader("画像を選択", type=["jpg", "jpeg", "png", "webp"])
+    
+    uploaded_image = None
+    if uploaded_file is not None:
+        try:
+            uploaded_image = Image.open(uploaded_file)
+            st.image(uploaded_image, caption="送信する画像", width=250)
+        except Exception as e:
+            st.error("画像の読み込みに失敗しました。別の画像を試してください。")
 
 # --- 9. プロンプト定義 ---
 system_instruction = f"""
