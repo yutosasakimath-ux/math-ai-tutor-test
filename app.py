@@ -63,6 +63,10 @@ if "last_reset_date" not in st.session_state:
 if "last_used_model" not in st.session_state:
     st.session_state.last_used_model = "まだ回答していません"
 
+# 画像アップローダーのリセット用キー
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
 # 日付が変わったらカウントリセット
 if st.session_state.last_reset_date != datetime.date.today():
     st.session_state.pro_usage_count = 0
@@ -79,8 +83,9 @@ if st.session_state.user_info is None:
     
     with tab1:
         with st.form("login_form"):
-            email = st.text_input("メールアドレス")
-            password = st.text_input("パスワード", type="password")
+            # keyを追加して重複エラーを回避
+            email = st.text_input("メールアドレス", key="login_email")
+            password = st.text_input("パスワード", type="password", key="login_password")
             submit = st.form_submit_button("ログイン")
             if submit:
                 resp = sign_in_with_email(email, password)
@@ -93,8 +98,9 @@ if st.session_state.user_info is None:
 
     with tab2:
         with st.form("signup_form"):
-            new_email = st.text_input("メールアドレス")
-            new_password = st.text_input("パスワード", type="password")
+            # keyを追加して重複エラーを回避
+            new_email = st.text_input("メールアドレス", key="signup_email")
+            new_password = st.text_input("パスワード", type="password", key="signup_password")
             submit_new = st.form_submit_button("アカウント作成")
             if submit_new:
                 resp = sign_up_with_email(new_email, new_password)
@@ -283,10 +289,12 @@ system_instruction = f"""
 
 # ★★★ 画像アップロード機能の追加 ★★★
 with st.container():
+    # 動的なキーを使用することで、送信後にアップローダーをリセット可能にする
+    uploader_key = f"file_uploader_{st.session_state.uploader_key}"
     uploaded_file = st.file_uploader(
         "📸 ノートや問題を撮影してアップロード", 
         type=["jpg", "png", "jpeg"],
-        key="file_uploader"
+        key=uploader_key
     )
 
 if prompt := st.chat_input("質問や回答を入力してください..."):
@@ -399,4 +407,7 @@ if prompt := st.chat_input("質問や回答を入力してください..."):
         "timestamp": firestore.SERVER_TIMESTAMP
     })
     
+    # ★★★ 送信完了後にアップローダーをリセット ★★★
+    if uploaded_file:
+        st.session_state.uploader_key += 1
     st.rerun()
