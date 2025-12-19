@@ -476,46 +476,43 @@ with st.sidebar:
                 if not api_key:
                     st.error("Gemini APIキーを設定してください。")
                 else:
-                    with st.spinner("今日の会話ログを分析中..."):
+                    with st.spinner("今日の全履歴（削除分含む）を抽出中..."):
                         try:
-                            # --- 日本時間 (JST) の本日 0:00 〜 24:00 を定義 ---
-                            now_utc = datetime.datetime.now(datetime.timezone.utc)
-                            jst_offset = datetime.timedelta(hours=9)
-                            jst_now = now_utc + jst_offset
-                            start_of_day_jst = jst_now.replace(hour=0, minute=0, second=0, microsecond=0)
+                            # --- 日本時間 (JST) の本日 0:00 〜 24:00 を厳密に定義 ---
+                            jst_tz = datetime.timezone(datetime.timedelta(hours=9))
+                            now_jst = datetime.datetime.now(jst_tz)
+                            start_of_day_jst = now_jst.replace(hour=0, minute=0, second=0, microsecond=0)
                             end_of_day_jst = start_of_day_jst + datetime.timedelta(days=1)
 
-                            # --- 1. データの取得 (archived_sessions + history) ---
                             all_messages = []
 
                             # (A) archived_sessions から取得 (削除された履歴)
                             archived_docs = user_ref.collection("archived_sessions").stream()
                             for doc in archived_docs:
                                 data = doc.to_dict()
-                                # アーカイブされた日ではなく、中身の各メッセージのタイムスタンプで判定
                                 msg_list = data.get("messages", [])
                                 for m in msg_list:
                                     ts = m.get("timestamp")
                                     if ts:
-                                        ts_jst = ts.astimezone(datetime.timezone(jst_offset))
+                                        # Firestoreから取得したdatetimeをJSTに変換
+                                        ts_jst = ts.astimezone(jst_tz)
                                         if start_of_day_jst <= ts_jst < end_of_day_jst:
                                             all_messages.append(m)
 
-                            # (B) 現在の history から取得 (削除されていない現在進行形の履歴)
+                            # (B) 現在の history から取得 (まだ削除されていない履歴)
                             history_docs = user_ref.collection("history").order_by("timestamp").stream()
                             for doc in history_docs:
                                 m = doc.to_dict()
                                 ts = m.get("timestamp")
                                 if ts:
-                                    ts_jst = ts.astimezone(datetime.timezone(jst_offset))
+                                    ts_jst = ts.astimezone(jst_tz)
                                     if start_of_day_jst <= ts_jst < end_of_day_jst:
                                         all_messages.append(m)
 
-                            # --- 2. メッセージを時間順に統合 ---
                             if not all_messages:
                                 st.warning("今日の学習履歴（日本時間 0:00〜）が見つかりませんでした。")
                             else:
-                                # タイムスタンプでソート (アーカイブと現在の履歴が混ざるため)
+                                # タイムスタンプで全メッセージを時間順に並べ替え
                                 all_messages.sort(key=lambda x: x.get("timestamp") if x.get("timestamp") else datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
 
                                 conversation_text = ""
@@ -531,7 +528,7 @@ with st.sidebar:
                                         content_text = str(raw_content)
                                     conversation_text += f"{role_name}: {content_text}\n"
 
-                                # --- 3. AIによるレポート生成 ---
+                                # --- AIによるレポート生成 ---
                                 report_system_instruction = f"""
                                 あなたは学習塾の「保護者への報告担当者」です。
                                 以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
