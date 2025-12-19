@@ -338,13 +338,13 @@ with st.sidebar:
         if ADMIN_KEY and report_admin_pass == ADMIN_KEY:
             st.info("🔓 管理者モード")
 
-            # --- 【追加】使用モデル情報 ---
+            # --- 使用モデル情報 ---
             st.markdown("### 🤖 モデル稼働状況")
             st.info(f"**最後に使用したモデル:** `{st.session_state.last_used_model}`")
 
             st.markdown("---")
             
-            # --- 【移動】利用可能なモデル一覧を取得 ---
+            # --- 利用可能なモデル一覧を取得 ---
             if st.button("📡 利用可能なモデル一覧を取得"):
                 if not api_key:
                     st.error("APIキーが設定されていません")
@@ -365,7 +365,7 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"取得エラー: {e}")
 
-            # --- 【移動】デバッグログ (エラー履歴) ---
+            # --- デバッグログ (エラー履歴) ---
             st.markdown("### 🛠 デバッグログ")
             if st.session_state.debug_logs:
                 for i, log in enumerate(reversed(st.session_state.debug_logs)):
@@ -378,26 +378,135 @@ with st.sidebar:
                 st.caption("現在エラーログはありません")
             
             st.markdown("---")
+            
+            # --- 【追加】コスト分析機能 ---
+            st.markdown("### 💰 コスト分析")
+            if st.button("📊 ログからコストを試算"):
+                with st.spinner("Firestoreのログを集計中..."):
+                    try:
+                        # 1. 料金設定 (Gemini 3.0 Flash: 入力$0.50/1M, 出力$3.00/1M)
+                        INPUT_PRICE_PER_M = 0.50  # USD per 1M tokens
+                        OUTPUT_PRICE_PER_M = 3.00  # USD per 1M tokens
+                        USD_JPY = 155.5            # 1 USD = 155.5 JPY
+                        
+                        # システムプロンプトの概算文字数 (約700文字と仮定)
+                        SYSTEM_PROMPT_EST_LEN = 700 
+                        
+                        # Firestoreからログ取得 (逐次ログがあればそれを、なければ履歴から)
+                        # full_conversation_logs: 全てのログ（削除分含む）
+                        # history: 現在の表示用履歴（削除済みは含まない）
+                        
+                        logs_ref = user_ref.collection("full_conversation_logs").order_by("timestamp")
+                        docs = logs_ref.stream()
+                        logs = [d.to_dict() for d in docs]
+                        
+                        data_source = "全保存ログ (full_conversation_logs)"
+                        
+                        if not logs:
+                            logs_ref = user_ref.collection("history").order_by("timestamp")
+                            docs = logs_ref.stream()
+                            logs = [d.to_dict() for d in docs]
+                            data_source = "現在の履歴 (history)"
+
+                        if not logs:
+                            st.warning("ログデータが見つかりませんでした。")
+                        else:
+                            # 2. シミュレーション計算
+                            total_input_chars = 0
+                            total_output_chars = 0
+                            
+                            # 履歴バッファ（APIは過去の会話も毎回送るため、それを再現）
+                            history_buffer_len = 0
+                            
+                            for log in logs:
+                                content = log.get("content", "")
+                                content_len = len(content)
+                                
+                                # 画像判定 (ログに画像注釈があれば、画像トークン分を加算)
+                                # 画像1枚 ≒ 258トークンだが、ここでは安全側に300文字相当とする
+                                img_cost = 0
+                                if "(※画像を送信しました)" in content:
+                                    img_cost = 300
+                                
+                                if log.get("role") == "user":
+                                    # 入力トークン = システム指示 + これまでの履歴 + 今回の入力 + 画像
+                                    current_input = SYSTEM_PROMPT_EST_LEN + history_buffer_len + content_len + img_cost
+                                    total_input_chars += current_input
+                                    
+                                    # 履歴バッファに追加 (このアプリの実装では画像データ自体は履歴に残らないのでテキスト分のみ累積)
+                                    history_buffer_len += content_len
+                                    
+                                elif log.get("role") == "model":
+                                    # 出力トークン = 今回の回答
+                                    total_output_chars += content_len
+                                    
+                                    # 履歴バッファに追加
+                                    history_buffer_len += content_len
+
+                            # 3. コスト計算 (1文字 ≒ 1トークンと仮定して計算)
+                            # 入力コスト
+                            input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
+                            # 出力コスト
+                            output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
+                            
+                            total_usd = input_cost_usd + output_cost_usd
+                            total_jpy = total_usd * USD_JPY
+
+                            # 4. 結果表示
+                            st.success(f"試算完了 (ソース: {data_source})")
+                            
+                            col_c1, col_c2, col_c3 = st.columns(3)
+                            with col_c1:
+                                st.metric("推定総コスト", f"¥ {total_jpy:.2f}")
+                            with col_c2:
+                                st.metric("総入力 (文字相当)", f"{total_input_chars:,}")
+                            with col_c3:
+                                st.metric("総出力 (文字相当)", f"{total_output_chars:,}")
+                            
+                            st.caption("※ Gemini 3.0 Flash (Preview) 価格で計算。1文字=1トークン換算の概算です。")
+                            st.caption(f"※ 会話ターン数: {len(logs)} 回")
+
+                    except Exception as e:
+                        st.error(f"計算エラー: {e}")
+
+            st.markdown("---")
             st.markdown("### 📝 レポート作成")
             
             if st.button("📝 今日のレポートを作成"):
-                if not api_key:
+                if not st.session_state.messages:
+                    st.warning("まだ学習履歴がありません。")
+                elif not api_key:
                     st.error("Gemini APIキーを設定してください。")
                 else:
-                    with st.spinner("今日の学習ログを集計中..."):
+                    with st.spinner("会話ログを分析中..."):
                         try:
-                            # 1. 今日の全ログをFirestoreから取得 (0:00〜24:00)
-                            now = datetime.datetime.now()
-                            today_start = datetime.datetime(now.year, now.month, now.day)
+                            report_system_instruction = f"""
+                            あなたは学習塾の「保護者への報告担当者」です。
+                            以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
+                            生徒名は「{new_name}」さんです。
                             
-                            # 検索効率のため today_start 以降のログをストリーム
-                            logs_ref = user_ref.collection("full_conversation_logs")
-                            docs = logs_ref.where("timestamp", ">=", today_start).order_by("timestamp").stream()
+                            【絶対遵守する出力フォーマット】
+                            --------------------------------------------------
+                            【📅 本日の学習レポート】
+                            生徒名：{new_name}
+
+                            ■ 学習トピック
+                            （ここに単元名やテーマを簡潔に書く）
+
+                            ■ 理解度スコア
+                            （1〜5の数字）/ 5
+                            （評価理由を1行で簡潔に）
+
+                            ■ 先生からのコメント
+                            （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
+
+                            ■ 保護者様へのアドバイス（今日のお声がけ）
+                            （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
+                            --------------------------------------------------
+                            """
                             
                             conversation_text = ""
-                            log_count = 0
-                            for doc in docs:
-                                m = doc.to_dict()
+                            for m in st.session_state.messages[-20:]: 
                                 role_name = "先生" if m["role"] == "model" else "生徒"
                                 raw_content = m["content"]
                                 content_text = ""
@@ -408,61 +517,32 @@ with st.sidebar:
                                 else:
                                     content_text = str(raw_content)
                                 conversation_text += f"{role_name}: {content_text}\n"
-                                log_count += 1
 
-                            if log_count == 0:
-                                st.warning("今日一日の学習履歴が見つかりませんでした。")
+                            genai.configure(api_key=api_key)
+                            REPORT_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp", "gemini-2.5-flash"]
+                            report_text = ""
+                            success_report = False
+                            error_log = []
+                            
+                            for model_name in REPORT_MODELS:
+                                try:
+                                    report_model = genai.GenerativeModel(model_name, system_instruction=report_system_instruction)
+                                    response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
+                                    if response.text:
+                                        report_text = response.text
+                                        success_report = True
+                                        break
+                                except Exception as e:
+                                    error_log.append(f"{model_name}: {str(e)}")
+                                    continue
+                            
+                            if success_report and report_text:
+                                st.session_state.last_report = report_text
+                                st.success("レポートを作成しました！")
                             else:
-                                report_system_instruction = f"""
-                                あなたは学習塾の「保護者への報告担当者」です。
-                                以下の「生徒とAI講師の今日一日の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
-                                生徒名は「{new_name}」さんです。
-                                
-                                【絶対遵守する出力フォーマット】
-                                --------------------------------------------------
-                                【📅 本日の学習レポート】
-                                生徒名：{new_name}
-
-                                ■ 学習トピック
-                                （今日扱った具体的な単元名やテーマを簡潔に書く）
-
-                                ■ 理解度スコア
-                                （1〜5の数字）/ 5
-                                （評価理由を1行で簡潔に）
-
-                                ■ 先生からのコメント
-                                （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
-
-                                ■ 保護者様へのアドバイス（今日のお声がけ）
-                                （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
-                                --------------------------------------------------
-                                """
-
-                                genai.configure(api_key=api_key)
-                                REPORT_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp", "gemini-2.5-flash"]
-                                report_text = ""
-                                success_report = False
-                                error_log = []
-                                
-                                for model_name in REPORT_MODELS:
-                                    try:
-                                        report_model = genai.GenerativeModel(model_name, system_instruction=report_system_instruction)
-                                        response = report_model.generate_content(f"【今日の全会話ログ】\n{conversation_text}")
-                                        if response.text:
-                                            report_text = response.text
-                                            success_report = True
-                                            break
-                                    except Exception as e:
-                                        error_log.append(f"{model_name}: {str(e)}")
-                                        continue
-                                
-                                if success_report and report_text:
-                                    st.session_state.last_report = report_text
-                                    st.success(f"今日一日のログ（{log_count}件）からレポートを作成しました！")
-                                else:
-                                    st.error("レポート生成に失敗しました。")
-                                    with st.expander("エラー詳細"):
-                                        st.write(error_log)
+                                st.error("レポート生成に失敗しました。")
+                                with st.expander("エラー詳細"):
+                                    st.write(error_log)
 
                         except Exception as e:
                             st.error(f"予期せぬエラー: {e}")
