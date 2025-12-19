@@ -473,76 +473,98 @@ with st.sidebar:
             st.markdown("### 📝 レポート作成")
             
             if st.button("📝 今日のレポートを作成"):
-                if not st.session_state.messages:
-                    st.warning("まだ学習履歴がありません。")
-                elif not api_key:
+                if not api_key:
                     st.error("Gemini APIキーを設定してください。")
                 else:
-                    with st.spinner("会話ログを分析中..."):
+                    with st.spinner("今日の会話ログを分析中..."):
                         try:
-                            report_system_instruction = f"""
-                            あなたは学習塾の「保護者への報告担当者」です。
-                            以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
-                            生徒名は「{new_name}」さんです。
-                            
-                            【絶対遵守する出力フォーマット】
-                            --------------------------------------------------
-                            【📅 本日の学習レポート】
-                            生徒名：{new_name}
+                            # --- 日本時間 (JST) の本日 0:00 〜 24:00 を定義 ---
+                            # FirestoreのtimestampはUTCなので、JSTに変換して判定する
+                            now_utc = datetime.datetime.now(datetime.timezone.utc)
+                            jst_offset = datetime.timedelta(hours=9)
+                            jst_now = now_utc + jst_offset
+                            start_of_day_jst = jst_now.replace(hour=0, minute=0, second=0, microsecond=0)
+                            end_of_day_jst = start_of_day_jst + datetime.timedelta(days=1)
 
-                            ■ 学習トピック
-                            （ここに単元名やテーマを簡潔に書く）
-
-                            ■ 理解度スコア
-                            （1〜5の数字）/ 5
-                            （評価理由を1行で簡潔に）
-
-                            ■ 先生からのコメント
-                            （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
-
-                            ■ 保護者様へのアドバイス（今日のお声がけ）
-                            （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
-                            --------------------------------------------------
-                            """
-                            
+                            # --- データベースから今日の履歴を直接取得 ---
+                            # セッションのmessagesではなく、DBから最新の本日分を抽出
                             conversation_text = ""
-                            for m in st.session_state.messages[-20:]: 
-                                role_name = "先生" if m["role"] == "model" else "生徒"
-                                raw_content = m["content"]
-                                content_text = ""
-                                if isinstance(raw_content, str):
-                                    content_text = raw_content
-                                elif isinstance(raw_content, dict):
-                                    content_text = raw_content.get("text", str(raw_content))
-                                else:
-                                    content_text = str(raw_content)
-                                conversation_text += f"{role_name}: {content_text}\n"
+                            history_docs = user_ref.collection("history").order_by("timestamp").stream()
+                            
+                            found_any_today = False
+                            for doc in history_docs:
+                                m = doc.to_dict()
+                                ts = m.get("timestamp")
+                                if ts:
+                                    # FirestoreのtimestampをJSTに変換
+                                    ts_jst = ts.astimezone(datetime.timezone(jst_offset))
+                                    # 本日の範囲内か判定
+                                    if start_of_day_jst <= ts_jst < end_of_day_jst:
+                                        found_any_today = True
+                                        role_name = "先生" if m["role"] == "model" else "生徒"
+                                        raw_content = m["content"]
+                                        content_text = ""
+                                        if isinstance(raw_content, str):
+                                            content_text = raw_content
+                                        elif isinstance(raw_content, dict):
+                                            content_text = raw_content.get("text", str(raw_content))
+                                        else:
+                                            content_text = str(raw_content)
+                                        conversation_text += f"{role_name}: {content_text}\n"
 
-                            genai.configure(api_key=api_key)
-                            REPORT_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp", "gemini-2.5-flash"]
-                            report_text = ""
-                            success_report = False
-                            error_log = []
-                            
-                            for model_name in REPORT_MODELS:
-                                try:
-                                    report_model = genai.GenerativeModel(model_name, system_instruction=report_system_instruction)
-                                    response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
-                                    if response.text:
-                                        report_text = response.text
-                                        success_report = True
-                                        break
-                                except Exception as e:
-                                    error_log.append(f"{model_name}: {str(e)}")
-                                    continue
-                            
-                            if success_report and report_text:
-                                st.session_state.last_report = report_text
-                                st.success("レポートを作成しました！")
+                            if not found_any_today:
+                                st.warning("今日の学習履歴（日本時間 0:00〜）が見つかりませんでした。")
                             else:
-                                st.error("レポート生成に失敗しました。")
-                                with st.expander("エラー詳細"):
-                                    st.write(error_log)
+                                report_system_instruction = f"""
+                                あなたは学習塾の「保護者への報告担当者」です。
+                                以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
+                                生徒名は「{new_name}」さんです。
+                                
+                                【絶対遵守する出力フォーマット】
+                                --------------------------------------------------
+                                【📅 本日の学習レポート】
+                                生徒名：{new_name}
+
+                                ■ 学習トピック
+                                （ここに単元名やテーマを簡潔に書く）
+
+                                ■ 理解度スコア
+                                （1〜5の数字）/ 5
+                                （評価理由を1行で簡潔に）
+
+                                ■ 先生からのコメント
+                                （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
+
+                                ■ 保護者様へのアドバイス（今日のお声がけ）
+                                （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
+                                --------------------------------------------------
+                                """
+                                
+                                genai.configure(api_key=api_key)
+                                REPORT_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp", "gemini-2.5-flash"]
+                                report_text = ""
+                                success_report = False
+                                error_log = []
+                                
+                                for model_name in REPORT_MODELS:
+                                    try:
+                                        report_model = genai.GenerativeModel(model_name, system_instruction=report_system_instruction)
+                                        response = report_model.generate_content(f"【会話ログ】\n{conversation_text}")
+                                        if response.text:
+                                            report_text = response.text
+                                            success_report = True
+                                            break
+                                    except Exception as e:
+                                        error_log.append(f"{model_name}: {str(e)}")
+                                        continue
+                                
+                                if success_report and report_text:
+                                    st.session_state.last_report = report_text
+                                    st.success("本日のレポートを作成しました！")
+                                else:
+                                    st.error("レポート生成に失敗しました。")
+                                    with st.expander("エラー詳細"):
+                                        st.write(error_log)
 
                         except Exception as e:
                             st.error(f"予期せぬエラー: {e}")
@@ -572,8 +594,6 @@ if not st.session_state.messages_loaded:
     st.session_state.messages_loaded = True
 
 # ★★★ 修正点：チャット履歴と新規メッセージを表示するための「枠（コンテナ）」を作る ★★★
-# これにより、フォーム送信後も、この「枠」の中にメッセージを追加できるので、
-# チャットが途切れず、自然な順序（入力→ぐるぐる→回答）で表示されます。
 chat_log_container = st.container()
 
 with chat_log_container:
@@ -614,59 +634,46 @@ system_instruction = f"""
 """
 
 # --- 10. AI応答ロジック ---
-# 区切り線 st.write("---") は削除しました。これにより、チャットと入力欄の隙間がなくなります。
-
-# 画面下部に固定風に見せる物理フォーム配置
 with st.form(key="chat_form", clear_on_submit=True):
-    # レイアウト：[カメラアイコン] [テキスト入力] [送信ボタン]
     col1, col2, col3 = st.columns([0.8, 5, 1], gap="small")
     
     with col1:
-        # ラベルなし、CSSでカメラアイコン化されたアップローダー
         uploaded_file = st.file_uploader(" ", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed")
     
     with col2:
-        # テキストエリア
         user_prompt = st.text_area("質問", placeholder="質問を入力...", height=68, label_visibility="collapsed")
         
     with col3:
-        # 送信ボタン
-        st.write("") # 位置調整
+        st.write("") 
         submitted = st.form_submit_button("送信")
 
-    # --- 送信処理 ---
     if submitted:
         if not user_prompt and not uploaded_file:
             st.warning("質問か画像を入力してください")
         elif not api_key:
             st.warning("サイドバーでGemini APIキーを設定してください。")
         else:
-            # 画像処理
             upload_img_obj = None
             user_msg_content = user_prompt
             
             if uploaded_file:
                 try:
                     upload_img_obj = Image.open(uploaded_file)
-                    # 画像がある場合、テキストに注釈を追加
                     user_msg_content += "\n\n(※画像を送信しました)"
                 except Exception as e:
                     st.error("画像エラー")
 
-            # ユーザーメッセージをセッションに追加
             st.session_state.messages.append({
                 "role": "user",
                 "content": user_msg_content
             })
             
-            # Firestoreへ保存（表示用）
             user_ref.collection("history").add({
                 "role": "user",
                 "content": user_msg_content,
                 "timestamp": firestore.SERVER_TIMESTAMP
             })
 
-            # 【ログ機能追加 2/2】 逐次保存用ログにも書き込む（削除ボタンでも消えない）
             user_ref.collection("full_conversation_logs").add({
                 "role": "user",
                 "content": user_msg_content,
@@ -674,22 +681,16 @@ with st.form(key="chat_form", clear_on_submit=True):
                 "log_type": "sequential"
             })
 
-            # ★★★ 修正点：先ほど作った「チャットの枠（chat_log_container）」の中に表示を入れる ★★★
             with chat_log_container:
-                # 1. あなたの入力（赤枠～）を即座に表示
                 with st.chat_message("user"):
                     st.markdown(user_msg_content)
                     if upload_img_obj:
                         st.image(upload_img_obj, width=200)
 
-                # 2. そのすぐ下で「ぐるぐる（思考中）」を回す
                 with st.spinner("AIコーチが思考中..."):
                     genai.configure(api_key=api_key)
                     history_for_ai = []
                     
-                    # ★★★ コスト削減施策：送信する履歴の数を制限する ★★★
-                    # 会話が長くなっても、直近の20メッセージ（約10往復）だけを送信することで
-                    # トークン消費の「雪だるま式増加」を防止し、コストを一定以下に抑えます。
                     MAX_HISTORY_MESSAGES = 20 
                     limited_messages = st.session_state.messages[:-1][-MAX_HISTORY_MESSAGES:]
                     
@@ -701,19 +702,17 @@ with st.form(key="chat_form", clear_on_submit=True):
                             content_str = str(m["content"])
                         history_for_ai.append({"role": m["role"], "parts": [content_str]})
 
-                    # ★★★ 修正点：コストと性能のバランスを考慮した最適順序に変更 ★★★
-                    # 戦略: Flash系で粘り、どうしてもダメな時だけProを使う（コスト爆増リスク回避）
                     PRIORITY_MODELS = [
-                        "gemini-3-flash-preview",    # 1. 本命: 最新・高速・安価・高性能
-                        "gemini-2.0-flash-exp",      # 2. バックアップ(安): 3.0がコケてもここで安く受ける
-                        "gemini-1.5-flash",          # 3. バックアップ(安・安定): 枯れた技術で確実に返す
-                        "gemini-3-pro-preview",      # 4. 最後の砦(高): Flash全滅時のみ稼働。最高性能
-                        "gemini-1.5-pro",            # 5. 予備
+                        "gemini-3-flash-preview",
+                        "gemini-2.0-flash-exp",
+                        "gemini-1.5-flash",
+                        "gemini-3-pro-preview",
+                        "gemini-1.5-pro",
                     ]
                     
                     ai_text = ""
                     success_model = None
-                    error_details = [] # エラー内容を保存するリスト
+                    error_details = [] 
                     
                     for model_name in PRIORITY_MODELS:
                         try:
@@ -729,15 +728,10 @@ with st.form(key="chat_form", clear_on_submit=True):
                             success_model = model_name
                             break 
                         except Exception as e:
-                            # エラー詳細を保存
                             timestamp_str = datetime.datetime.now().strftime('%H:%M:%S')
                             log_message = f"[{timestamp_str}] ⚠️ {model_name} エラー: {e}"
                             error_details.append(log_message)
-                            
-                            # セッションステートにも保存（UI表示用）
                             st.session_state.debug_logs.append(log_message)
-                            
-                            # 【追加】Firestoreにシステムログとして永続保存
                             try:
                                 db.collection("system_logs").add({
                                     "user_id": user_id,
@@ -747,19 +741,16 @@ with st.form(key="chat_form", clear_on_submit=True):
                                     "type": "generation_error"
                                 })
                             except:
-                                pass # ログ保存のエラーは無視
+                                pass
                             continue
                 
-                # 3. AIの処理が終わったら、その「ぐるぐる」が消えて、同じ場所に「解答」が出る
                 if success_model:
                     st.session_state.last_used_model = success_model
 
-                    # ★★★ デバッグ情報：意図した最新モデル以外が使われた場合のみ警告 ★★★
                     if success_model != PRIORITY_MODELS[0]:
                         with st.chat_message("assistant"):
                              st.warning(f"Note: 最新モデル ({PRIORITY_MODELS[0]}) が利用できなかったため、{success_model} を使用しました。")
                     
-                    # 結果の保存（表示用）
                     st.session_state.messages.append({
                         "role": "model",
                         "content": ai_text
@@ -771,7 +762,6 @@ with st.form(key="chat_form", clear_on_submit=True):
                         "timestamp": firestore.SERVER_TIMESTAMP
                     })
 
-                    # 【ログ機能追加 2/2】 逐次保存用ログにも書き込む（削除ボタンでも消えない）
                     user_ref.collection("full_conversation_logs").add({
                         "role": "model",
                         "content": ai_text,
@@ -780,11 +770,9 @@ with st.form(key="chat_form", clear_on_submit=True):
                         "model": success_model
                     })
                     
-                    # AIの回答を表示（ここも chat_log_container の中）
                     with st.chat_message("model"):
                         st.markdown(ai_text)
                     
-                    # 少し待ってからリロードして、正式に履歴として保存・表示
                     time.sleep(0.1) 
                     st.rerun()
                 else:
