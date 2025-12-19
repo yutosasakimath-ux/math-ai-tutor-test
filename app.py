@@ -338,13 +338,13 @@ with st.sidebar:
         if ADMIN_KEY and report_admin_pass == ADMIN_KEY:
             st.info("🔓 管理者モード")
 
-            # --- 【追加】使用モデル情報 ---
+            # --- 使用モデル情報 ---
             st.markdown("### 🤖 モデル稼働状況")
             st.info(f"**最後に使用したモデル:** `{st.session_state.last_used_model}`")
 
             st.markdown("---")
             
-            # --- 【移動】利用可能なモデル一覧を取得 ---
+            # --- 利用可能なモデル一覧を取得 ---
             if st.button("📡 利用可能なモデル一覧を取得"):
                 if not api_key:
                     st.error("APIキーが設定されていません")
@@ -365,7 +365,7 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"取得エラー: {e}")
 
-            # --- 【移動】デバッグログ (エラー履歴) ---
+            # --- デバッグログ (エラー履歴) ---
             st.markdown("### 🛠 デバッグログ")
             if st.session_state.debug_logs:
                 for i, log in enumerate(reversed(st.session_state.debug_logs)):
@@ -377,6 +377,98 @@ with st.sidebar:
             else:
                 st.caption("現在エラーログはありません")
             
+            st.markdown("---")
+            
+            # --- 【追加】コスト分析機能 ---
+            st.markdown("### 💰 コスト分析")
+            if st.button("📊 ログからコストを試算"):
+                with st.spinner("Firestoreのログを集計中..."):
+                    try:
+                        # 1. 料金設定 (Gemini 1.5/3.0 Flash想定: 入力$0.075/1M, 出力$0.30/1M)
+                        INPUT_PRICE_PER_M = 0.075  # USD per 1M tokens
+                        OUTPUT_PRICE_PER_M = 0.30  # USD per 1M tokens
+                        USD_JPY = 155.5            # 1 USD = 155.5 JPY
+                        
+                        # システムプロンプトの概算文字数 (約700文字と仮定)
+                        SYSTEM_PROMPT_EST_LEN = 700 
+                        
+                        # Firestoreからログ取得 (逐次ログがあればそれを、なければ履歴から)
+                        # full_conversation_logs: 全てのログ（削除分含む）
+                        # history: 現在の表示用履歴（削除済みは含まない）
+                        
+                        logs_ref = user_ref.collection("full_conversation_logs").order_by("timestamp")
+                        docs = logs_ref.stream()
+                        logs = [d.to_dict() for d in docs]
+                        
+                        data_source = "全保存ログ (full_conversation_logs)"
+                        
+                        if not logs:
+                            logs_ref = user_ref.collection("history").order_by("timestamp")
+                            docs = logs_ref.stream()
+                            logs = [d.to_dict() for d in docs]
+                            data_source = "現在の履歴 (history)"
+
+                        if not logs:
+                            st.warning("ログデータが見つかりませんでした。")
+                        else:
+                            # 2. シミュレーション計算
+                            total_input_chars = 0
+                            total_output_chars = 0
+                            
+                            # 履歴バッファ（APIは過去の会話も毎回送るため、それを再現）
+                            history_buffer_len = 0
+                            
+                            for log in logs:
+                                content = log.get("content", "")
+                                content_len = len(content)
+                                
+                                # 画像判定 (ログに画像注釈があれば、画像トークン分を加算)
+                                # 画像1枚 ≒ 258トークンだが、ここでは安全側に300文字相当とする
+                                img_cost = 0
+                                if "(※画像を送信しました)" in content:
+                                    img_cost = 300
+                                
+                                if log.get("role") == "user":
+                                    # 入力トークン = システム指示 + これまでの履歴 + 今回の入力 + 画像
+                                    current_input = SYSTEM_PROMPT_EST_LEN + history_buffer_len + content_len + img_cost
+                                    total_input_chars += current_input
+                                    
+                                    # 履歴バッファに追加 (このアプリの実装では画像データ自体は履歴に残らないのでテキスト分のみ累積)
+                                    history_buffer_len += content_len
+                                    
+                                elif log.get("role") == "model":
+                                    # 出力トークン = 今回の回答
+                                    total_output_chars += content_len
+                                    
+                                    # 履歴バッファに追加
+                                    history_buffer_len += content_len
+
+                            # 3. コスト計算 (1文字 ≒ 1トークンと仮定して計算)
+                            # 入力コスト
+                            input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
+                            # 出力コスト
+                            output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
+                            
+                            total_usd = input_cost_usd + output_cost_usd
+                            total_jpy = total_usd * USD_JPY
+
+                            # 4. 結果表示
+                            st.success(f"試算完了 (ソース: {data_source})")
+                            
+                            col_c1, col_c2, col_c3 = st.columns(3)
+                            with col_c1:
+                                st.metric("推定総コスト", f"¥ {total_jpy:.2f}")
+                            with col_c2:
+                                st.metric("総入力 (文字相当)", f"{total_input_chars:,}")
+                            with col_c3:
+                                st.metric("総出力 (文字相当)", f"{total_output_chars:,}")
+                            
+                            st.caption("※ Gemini 1.5 Flash価格で計算。1文字=1トークン換算の概算です。")
+                            st.caption(f"※ 会話ターン数: {len(logs)} 回")
+
+                    except Exception as e:
+                        st.error(f"計算エラー: {e}")
+
             st.markdown("---")
             st.markdown("### 📝 レポート作成")
             
