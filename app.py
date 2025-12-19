@@ -384,9 +384,9 @@ with st.sidebar:
             if st.button("📊 ログからコストを試算"):
                 with st.spinner("Firestoreのログを集計中..."):
                     try:
-                        # 1. 料金設定 (Gemini 1.5/3.0 Flash想定: 入力$0.075/1M, 出力$0.30/1M)
-                        INPUT_PRICE_PER_M = 0.075  # USD per 1M tokens
-                        OUTPUT_PRICE_PER_M = 0.30  # USD per 1M tokens
+                        # 1. 料金設定 (Gemini 3.0 Flash: 入力$0.50/1M, 出力$3.00/1M)
+                        INPUT_PRICE_PER_M = 0.50  # USD per 1M tokens
+                        OUTPUT_PRICE_PER_M = 3.00  # USD per 1M tokens
                         USD_JPY = 155.5            # 1 USD = 155.5 JPY
                         
                         # システムプロンプトの概算文字数 (約700文字と仮定)
@@ -463,7 +463,7 @@ with st.sidebar:
                             with col_c3:
                                 st.metric("総出力 (文字相当)", f"{total_output_chars:,}")
                             
-                            st.caption("※ Gemini 1.5 Flash価格で計算。1文字=1トークン換算の概算です。")
+                            st.caption("※ Gemini 3.0 Flash (Preview) 価格で計算。1文字=1トークン換算の概算です。")
                             st.caption(f"※ 会話ターン数: {len(logs)} 回")
 
                     except Exception as e:
