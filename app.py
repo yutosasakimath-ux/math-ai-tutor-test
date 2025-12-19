@@ -686,7 +686,14 @@ with st.form(key="chat_form", clear_on_submit=True):
                 with st.spinner("AIコーチが思考中..."):
                     genai.configure(api_key=api_key)
                     history_for_ai = []
-                    for m in st.session_state.messages[:-1]:
+                    
+                    # ★★★ コスト削減施策：送信する履歴の数を制限する ★★★
+                    # 会話が長くなっても、直近の20メッセージ（約10往復）だけを送信することで
+                    # トークン消費の「雪だるま式増加」を防止し、コストを一定以下に抑えます。
+                    MAX_HISTORY_MESSAGES = 20 
+                    limited_messages = st.session_state.messages[:-1][-MAX_HISTORY_MESSAGES:]
+                    
+                    for m in limited_messages: 
                         content_str = ""
                         if isinstance(m["content"], dict):
                             content_str = m["content"].get("text", str(m["content"]))
