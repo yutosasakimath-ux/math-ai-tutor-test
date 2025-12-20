@@ -97,55 +97,46 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# --- ★追加機能：フォント管理 ---
-FONT_URL = "https://moji.or.jp/wp-content/ipafont/IPAexfont/ipaexg00401.zip"
-FONT_FILE_NAME = "ipaexg.ttf"
-
-def ensure_japanese_font():
-    """PDF用の日本語フォントが存在するか確認し、なければダウンロードする"""
-    if os.path.exists(FONT_FILE_NAME):
-        return FONT_FILE_NAME
-    
-    try:
-        import zipfile
-        r = requests.get(FONT_URL)
-        if r.status_code == 200:
-            z = zipfile.ZipFile(io.BytesIO(r.content))
-            for info in z.infolist():
-                if info.filename.endswith(FONT_FILE_NAME):
-                    info.filename = FONT_FILE_NAME
-                    z.extract(info, path=".")
-                    return FONT_FILE_NAME
-    except Exception as e:
-        print(f"Font download error: {e}")
-    return None
-
 # --- ★追加機能：数式を画像に変換する関数 ---
 def render_math_to_image(latex_str, fontsize=16): # フォントサイズを少し大きく変更
     """
     LaTeX文字列をMatplotlibを使って画像(ImageReader)に変換する。
     """
     # Matplotlibで数式を描画
-    fig = plt.figure(figsize=(0.1, 0.1)) # 初期サイズはダミー
-    text = fig.text(0, 0, f"${latex_str}$", fontsize=fontsize, usetex=False)
+    fig = plt.figure(figsize=(0.01, 0.01)) # 初期サイズはダミー
     
-    # 描画サイズを取得してリサイズ
-    bbox = text.get_window_extent(fig.canvas.get_renderer())
-    bbox_inches = bbox.transformed(fig.dpi_scale_trans.inverted())
+    # 中心に配置するように設定 (ha='center', va='center')
+    text = fig.text(0.5, 0.5, f"${latex_str}$", fontsize=fontsize, ha='center', va='center', usetex=False)
     
-    # 少し余白を持たせる
-    fig.set_size_inches(bbox_inches.width + 0.1, bbox_inches.height + 0.1)
-    text.set_position((0.05, 0.05))
+    # 描画サイズを取得（レンダリングして正確なバウンディングボックスを得る）
+    fig.canvas.draw()
+    bbox = text.get_window_extent()
     
-    # 画像バッファに出力 (DPIを上げて鮮明にする)
+    # DPI取得
+    dpi = fig.dpi
+    
+    # インチ単位に変換し、十分な余白(パディング)を持たせる
+    # パディングを増やすことで「文字切れ」や「消えかけ」を物理的に防ぐ
+    padding_x = 0.4  # 左右の余白（インチ）
+    padding_y = 0.4  # 上下の余白（インチ）
+    width_inch = (bbox.width / dpi) + padding_x
+    height_inch = (bbox.height / dpi) + padding_y
+    
+    fig.set_size_inches(width_inch, height_inch)
+    
+    # 再配置（キャンバスサイズ変更後に再度中心に置く）
+    text.set_position((0.5, 0.5))
+    
+    # 画像バッファに出力
+    # transparent=False, facecolor='white' にすることで「かすれ」を防ぎ、くっきりさせる
+    # dpi=600 で印刷品質にする
     buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=400, transparent=True)
+    fig.savefig(buf, format='png', dpi=600, transparent=False, facecolor='white')
     plt.close(fig)
     buf.seek(0)
     
     # 高さ(mm換算)を返す
-    height_mm = bbox_inches.height * 25.4
-    return ImageReader(buf), height_mm
+    return ImageReader(buf), height_inch * 25.4
 
 def create_pdf(text_content, student_name):
     """テキストレポートからPDFを作成しバイナリデータとして返す（数式画像対応版）"""
@@ -193,7 +184,7 @@ def create_pdf(text_content, student_name):
             latex_str = math_match.group(1)
             try:
                 # フォントサイズを少し上げて視認性向上
-                img_reader, img_height_mm = render_math_to_image(latex_str, fontsize=16)
+                img_reader, img_height_mm = render_math_to_image(latex_str, fontsize=18)
                 
                 # 改ページ判定
                 if y_position - img_height_mm < 20 * mm:
@@ -201,9 +192,11 @@ def create_pdf(text_content, student_name):
                     p.setFont(font_name, 11)
                     y_position = height - 30 * mm
                 
-                # 画像を描画 (X座標は少しインデント)
-                p.drawImage(img_reader, 25 * mm, y_position - img_height_mm + 2*mm, height=img_height_mm * mm, preserveAspectRatio=True, mask='auto')
-                y_position -= (img_height_mm + 4) * mm # 次の行へ移動
+                # 画像を描画
+                # mask='auto' を削除（白背景画像なので不要。これにより描画が安定する）
+                # preserveAspectRatio=True で歪みを防ぐ
+                p.drawImage(img_reader, 25 * mm, y_position - img_height_mm + 2*mm, height=img_height_mm * mm, preserveAspectRatio=True)
+                y_position -= (img_height_mm + 2) * mm # 次の行へ移動
                 
             except Exception as e:
                 # 失敗時はそのままテキスト描画
