@@ -121,7 +121,7 @@ def ensure_japanese_font():
     return None
 
 # --- ★追加機能：数式を画像に変換する関数 ---
-def render_math_to_image(latex_str, fontsize=12):
+def render_math_to_image(latex_str, fontsize=16): # フォントサイズを少し大きく変更
     """
     LaTeX文字列をMatplotlibを使って画像(ImageReader)に変換する。
     """
@@ -137,9 +137,9 @@ def render_math_to_image(latex_str, fontsize=12):
     fig.set_size_inches(bbox_inches.width + 0.1, bbox_inches.height + 0.1)
     text.set_position((0.05, 0.05))
     
-    # 画像バッファに出力
+    # 画像バッファに出力 (DPIを上げて鮮明にする)
     buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=300, transparent=True)
+    fig.savefig(buf, format='png', dpi=400, transparent=True)
     plt.close(fig)
     buf.seek(0)
     
@@ -173,7 +173,8 @@ def create_pdf(text_content, student_name):
     p.setFont(font_name, 11)
     
     lines = text_content.split('\n')
-    max_char_per_line = 40 
+    # ★修正：行文字数を減らして見切れを防ぐ
+    max_char_per_line = 35 
     line_height = 6 * mm
     y_position = height - 50 * mm
     
@@ -191,7 +192,8 @@ def create_pdf(text_content, student_name):
             # 数式の場合：画像として描画
             latex_str = math_match.group(1)
             try:
-                img_reader, img_height_mm = render_math_to_image(latex_str, fontsize=14)
+                # フォントサイズを少し上げて視認性向上
+                img_reader, img_height_mm = render_math_to_image(latex_str, fontsize=16)
                 
                 # 改ページ判定
                 if y_position - img_height_mm < 20 * mm:
@@ -613,20 +615,22 @@ with st.sidebar:
                                         content_text = str(raw_content)
                                     conversation_text += f"{role_name}: {content_text}\n"
 
-                                # 2. レポートプロンプト (数式形式を指定)
+                                # 2. レポートプロンプト (★改善：インライン数式禁止・Unicode推奨)
                                 report_system_instruction = f"""
                                 あなたは数学の「学習まとめ作成AI」です。
                                 生徒の「{new_name}」さんが今日学習した内容を復習できるように、簡潔かつ明確なレポートを作成してください。
 
                                 【重要：数式の出力ルール】
-                                PDFで綺麗に数式を表示するため、以下のルールを厳守してください。
-                                1. 文中の簡単な数式（例: x, y, a=1）はそのまま書いてOKです。
-                                2. **複雑な数式（分数、ルート、2乗など）は、必ず独立した行にし、LaTeX形式で `$$` (ドルマーク2つ) で囲んでください。**
-                                   良い例:
+                                PDF生成時の文字化けを防ぐため、以下のルールを厳守してください。
+                                1. **文中の数式には、LaTeX記法（$x^2$, $\\alpha$ など）を絶対に使わないでください。**
+                                   代わりに、Unicode文字を使ってください。
+                                   - 良い例: x², α, β, a+b=c, y = 2x + 1
+                                   - 悪い例: $x^2$, $\\alpha$, $\\beta$
+                                
+                                2. **画像化が必要な複雑な数式（分数、ルート、積分など）のみ、`$$` で囲んで独立した行にしてください。**
+                                   この場合のみLaTeX記法が許されます。
+                                   例:
                                    $$ x = \\frac{{-b \\pm \\sqrt{{b^2-4ac}}}}{{2a}} $$
-                                   
-                                   悪い例:
-                                   x = (-b ± √(b^2-4ac)) / 2a  (読みづらい)
 
                                 【出力フォーマット（厳守）】
                                 --------------------------------------------------
@@ -636,7 +640,7 @@ with st.sidebar:
                                 （箇条書きで簡潔に）
 
                                 ■ 重要公式・ポイント
-                                （重要な数式は必ず $$...$$ で囲んで出力してください）
+                                （文中の数式はUnicodeで記述し、複雑な式のみ $$...$$ で独立行に出力）
 
                                 ■ 今日の解法メモ
                                 （具体的にどのような問題に取り組み、どう解決したかを要約）
