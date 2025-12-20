@@ -289,6 +289,47 @@ if st.session_state.user_info is None:
                                 st.error(f"データベース登録エラー: {e}")
         elif admin_pass_input:
             st.error("パスワードが違います")
+    
+    # --- ★追加機能：シミュレーションユーザーログイン ---
+    with st.expander("管理者用：シミュレーションユーザーでログイン"):
+        debug_pass_input = st.text_input("管理者パスワード", type="password", key="debug_login_pass")
+        if ADMIN_KEY and debug_pass_input == ADMIN_KEY:
+            st.info("🔓 デバッグモード：シミュレーション(sim_user)としてログインします")
+            
+            # シミュレーションユーザーを取得
+            try:
+                # ユーザー一覧を取得してPython側でフィルタリング（データ量が少ない前提）
+                all_users = db.collection("users").stream()
+                sim_users = {}
+                for doc in all_users:
+                    d = doc.to_dict()
+                    # is_simulatedフラグがある、またはIDがsim_user_で始まる場合
+                    if d.get("is_simulated") is True or doc.id.startswith("sim_user_"):
+                        sim_users[doc.id] = f"{d.get('name', 'No Name')} ({doc.id})"
+                
+                if not sim_users:
+                    st.warning("シミュレーションユーザーが見つかりません。データ生成スクリプトを実行してください。")
+                else:
+                    selected_sim_uid = st.selectbox("ログインするユーザーを選択", list(sim_users.keys()), format_func=lambda x: sim_users[x])
+                    
+                    if st.button("🚀 このユーザーとして強制ログイン"):
+                        # Firebase Authをバイパスして、セッションステートに直接注入
+                        st.session_state.user_info = {
+                            "uid": selected_sim_uid,
+                            "email": f"{selected_sim_uid}@example.com" # ダミーメール
+                        }
+                        if "user_name" in st.session_state:
+                             del st.session_state["user_name"] # 名前を再取得させるため削除
+                        
+                        st.success(f"{sim_users[selected_sim_uid]} としてログイン中...")
+                        time.sleep(1)
+                        st.rerun()
+                        
+            except Exception as e:
+                st.error(f"ユーザー取得エラー: {e}")
+        elif debug_pass_input:
+             st.error("パスワードが違います")
+
     st.stop()
 
 # =========================================================
@@ -436,64 +477,65 @@ with st.sidebar:
             
             st.markdown("---")
             
-            # --- コスト分析機能 ---
+            # --- コスト分析機能（全ユーザー集計対応版） ---
             st.markdown("### 💰 コスト分析")
-            if st.button("📊 ログからコストを試算"):
-                with st.spinner("Firestoreのログを集計中..."):
+            if st.button("📊 全ユーザーのログからコストを試算"):
+                with st.spinner("全ユーザーのログを集計中...（時間がかかる場合があります）"):
                     try:
                         INPUT_PRICE_PER_M = 0.50 
                         OUTPUT_PRICE_PER_M = 3.00
                         USD_JPY = 155.5
                         SYSTEM_PROMPT_EST_LEN = 700 
                         
-                        logs_ref = user_ref.collection("full_conversation_logs").order_by("timestamp")
-                        docs = logs_ref.stream()
-                        logs = [d.to_dict() for d in docs]
-                        data_source = "全保存ログ"
+                        total_input_chars = 0
+                        total_output_chars = 0
                         
-                        if not logs:
-                            logs_ref = user_ref.collection("history").order_by("timestamp")
+                        # 1. 全ユーザーを取得
+                        all_users = db.collection("users").stream()
+                        user_count = 0
+                        
+                        # 2. 各ユーザーのログをループ処理
+                        for u in all_users:
+                            user_count += 1
+                            # 各ユーザーの full_conversation_logs を取得
+                            logs_ref = u.reference.collection("full_conversation_logs").order_by("timestamp")
                             docs = logs_ref.stream()
-                            logs = [d.to_dict() for d in docs]
-                            data_source = "現在の履歴"
-
-                        if not logs:
-                            st.warning("ログデータが見つかりませんでした。")
-                        else:
-                            total_input_chars = 0
-                            total_output_chars = 0
+                            
                             history_buffer_len = 0
                             
-                            for log in logs:
-                                content = log.get("content", "")
+                            for log in docs:
+                                data = log.to_dict()
+                                content = data.get("content", "")
                                 content_len = len(content)
                                 img_cost = 0
                                 if "(※画像を送信しました)" in content:
                                     img_cost = 300
                                 
-                                if log.get("role") == "user":
+                                if data.get("role") == "user":
+                                    # 履歴を含む入力トークン数の概算
                                     current_input = SYSTEM_PROMPT_EST_LEN + history_buffer_len + content_len + img_cost
                                     total_input_chars += current_input
                                     history_buffer_len += content_len
-                                elif log.get("role") == "model":
+                                elif data.get("role") == "model":
                                     total_output_chars += content_len
                                     history_buffer_len += content_len
 
-                            input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
-                            output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
-                            total_usd = input_cost_usd + output_cost_usd
-                            total_jpy = total_usd * USD_JPY
+                        # コスト計算
+                        input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
+                        output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
+                        total_usd = input_cost_usd + output_cost_usd
+                        total_jpy = total_usd * USD_JPY
 
-                            st.success(f"試算完了 (ソース: {data_source})")
-                            col_c1, col_c2, col_c3 = st.columns(3)
-                            with col_c1:
-                                st.metric("推定総コスト", f"¥ {total_jpy:.2f}")
-                            with col_c2:
-                                st.metric("総入力", f"{total_input_chars:,}")
-                            with col_c3:
-                                st.metric("総出力", f"{total_output_chars:,}")
-                            
-                            st.caption("※ 概算値です。")
+                        st.success(f"集計完了 (対象ユーザー数: {user_count}人)")
+                        col_c1, col_c2, col_c3 = st.columns(3)
+                        with col_c1:
+                            st.metric("推定総コスト", f"¥ {total_jpy:.2f}")
+                        with col_c2:
+                            st.metric("総入力文字数", f"{total_input_chars:,}")
+                        with col_c3:
+                            st.metric("総出力文字数", f"{total_output_chars:,}")
+                        
+                        st.caption("※ シミュレーションデータを含む全ユーザーの合算値です。")
 
                     except Exception as e:
                         st.error(f"計算エラー: {e}")
