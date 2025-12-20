@@ -97,6 +97,29 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
+# --- ★追加機能：フォント管理 ---
+FONT_URL = "https://moji.or.jp/wp-content/ipafont/IPAexfont/ipaexg00401.zip"
+FONT_FILE_NAME = "ipaexg.ttf"
+
+def ensure_japanese_font():
+    """PDF用の日本語フォントが存在するか確認し、なければダウンロードする"""
+    if os.path.exists(FONT_FILE_NAME):
+        return FONT_FILE_NAME
+    
+    try:
+        import zipfile
+        r = requests.get(FONT_URL)
+        if r.status_code == 200:
+            z = zipfile.ZipFile(io.BytesIO(r.content))
+            for info in z.infolist():
+                if info.filename.endswith(FONT_FILE_NAME):
+                    info.filename = FONT_FILE_NAME
+                    z.extract(info, path=".")
+                    return FONT_FILE_NAME
+    except Exception as e:
+        print(f"Font download error: {e}")
+    return None
+
 # --- ★追加機能：数式を画像に変換する関数 ---
 def render_math_to_image(latex_str, fontsize=16): # フォントサイズを少し大きく変更
     """
