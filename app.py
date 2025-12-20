@@ -110,7 +110,7 @@ def ensure_japanese_font():
                     z.extract(info, path=".")
                     return FONT_FILE_NAME
     except Exception as e:
-        # エラー時はログに出すが、画面には出さない（ユーザーを驚かせないため）
+        # エラー時はログに出すが、画面には出さない
         print(f"Font download error: {e}")
     return None
 
@@ -164,7 +164,7 @@ def create_pdf(text_content, student_name):
     buffer.seek(0)
     return buffer
 
-# --- Secretsの取得 ---
+# --- Secretsの取得（ご指定のスタイルに統一） ---
 if "ADMIN_KEY" in st.secrets:
     ADMIN_KEY = st.secrets["ADMIN_KEY"]
 else:
@@ -174,6 +174,12 @@ if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
 else:
     FIREBASE_WEB_API_KEY = "ここにウェブAPIキーを貼り付ける" 
+
+# Gemini APIキーも同様に取得
+if "GEMINI_API_KEY" in st.secrets:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+else:
+    GEMINI_API_KEY = None
 
 # --- 1. Firebase初期化 ---
 if not firebase_admin._apps:
@@ -305,10 +311,6 @@ if "user_name" not in st.session_state:
 
 student_name = st.session_state.user_name
 
-api_key = ""
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-
 # --- 6. サイドバー ---
 with st.sidebar:
     st.header(f"ようこそ、{student_name}さん")
@@ -400,11 +402,11 @@ with st.sidebar:
             
             # --- 利用可能なモデル一覧を取得 ---
             if st.button("📡 利用可能なモデル一覧を取得"):
-                if not api_key:
+                if not GEMINI_API_KEY:
                     st.error("APIキーが設定されていません")
                 else:
                     try:
-                        genai.configure(api_key=api_key)
+                        genai.configure(api_key=GEMINI_API_KEY)
                         models = genai.list_models()
                         available_models = []
                         for m in models:
@@ -499,7 +501,7 @@ with st.sidebar:
             st.caption("生徒用の復習レポート（公式・解法まとめ）を生成します。")
             
             if st.button("📝 今日のレポートを作成＆PDF準備"):
-                if not api_key:
+                if not GEMINI_API_KEY:
                     st.error("Gemini APIキーを設定してください。")
                 else:
                     with st.spinner("会話ログを分析し、PDFを作成しています..."):
@@ -550,7 +552,7 @@ with st.sidebar:
                                         content_text = str(raw_content)
                                     conversation_text += f"{role_name}: {content_text}\n"
 
-                                # 2. 生徒向けレポートプロンプト (20日版仕様)
+                                # 2. 生徒向けレポートプロンプト
                                 report_system_instruction = f"""
                                 あなたは数学の「学習まとめ作成AI」です。
                                 生徒の「{new_name}」さんが今日学習した内容を復習できるように、簡潔かつ明確なレポートを作成してください。
@@ -577,7 +579,7 @@ with st.sidebar:
                                 ※ マークダウンは使わず、プレーンテキストで見やすく整形してください。
                                 """
                                 
-                                genai.configure(api_key=api_key)
+                                genai.configure(api_key=GEMINI_API_KEY)
                                 # 最新モデル優先
                                 REPORT_MODELS = [
                                     "gemini-3-flash-preview", 
@@ -634,8 +636,9 @@ with st.sidebar:
             st.error("パスワードが違います")
     
     st.markdown("---")
-    if not api_key:
-        api_key = st.text_input("Gemini APIキー", type="password")
+    # キーが未設定の場合の入力フォーム
+    if not GEMINI_API_KEY:
+        GEMINI_API_KEY = st.text_input("Gemini APIキー", type="password")
 
 # --- 8. メイン画面 ---
 st.title("🎓 高校数学 AI専属コーチ")
@@ -698,7 +701,7 @@ with st.form(key="chat_form", clear_on_submit=True):
     if submitted:
         if not user_prompt and not uploaded_file:
             st.warning("質問か画像を入力してください")
-        elif not api_key:
+        elif not GEMINI_API_KEY:
             st.warning("Gemini APIキーが設定されていません。")
         else:
             upload_img_obj = None
@@ -731,7 +734,7 @@ with st.form(key="chat_form", clear_on_submit=True):
                         st.image(upload_img_obj, width=200)
 
                 with st.spinner("AIコーチが思考中..."):
-                    genai.configure(api_key=api_key)
+                    genai.configure(api_key=GEMINI_API_KEY)
                     history_for_ai = []
                     MAX_HISTORY_MESSAGES = 20
                     limited_messages = st.session_state.messages[:-1][-MAX_HISTORY_MESSAGES:]
@@ -744,7 +747,7 @@ with st.form(key="chat_form", clear_on_submit=True):
                             content_str = str(m["content"])
                         history_for_ai.append({"role": m["role"], "parts": [content_str]})
 
-                    # モデルリスト（20日版と同じ最新構成）
+                    # モデルリスト（最新優先）
                     PRIORITY_MODELS = [
                         "gemini-3-flash-preview",
                         "gemini-2.0-flash-exp",
@@ -803,29 +806,3 @@ with st.form(key="chat_form", clear_on_submit=True):
                     st.rerun()
                 else:
                     st.error(f"❌ エラーが発生しました。\n詳細: {error_details}")
-```
-
-### 3. Streamlit Cloudへのデプロイ手順
-
-Streamlit Community Cloudにデプロイする際は、以下の設定が必要です。
-
-1.  GitHubに上記の `app.py` と `requirements.txt` をアップロードします。
-2.  Streamlit Cloudの管理画面でアプリを作成します。
-3.  **Secretsの設定:** 「Advanced Settings」の「Secrets」欄に、以下の形式でキーを設定してください。
-
-```toml
-ADMIN_KEY = "あなたの管理者パスワード"
-FIREBASE_WEB_API_KEY = "FirebaseのWeb APIキー"
-GEMINI_API_KEY = "GeminiのAPIキー"
-
-[firebase]
-type = "service_account"
-project_id = "..."
-private_key_id = "..."
-private_key = "-----BEGIN PRIVATE KEY-----\n..."
-client_email = "..."
-client_id = "..."
-auth_uri = "https://accounts.google.com/o/oauth2/auth"
-token_uri = "https://oauth2.googleapis.com/token"
-auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-client_x509_cert_url = "..."
