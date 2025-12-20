@@ -4,3 +4,4 @@ firebase-admin
 requests
 Pillow
 reportlab
+matplotlib
