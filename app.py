@@ -12,18 +12,13 @@ import io
 import base64
 import re  # 正規表現用
 
-# --- ★追加：数式描画用ライブラリ ---
-import matplotlib
-import matplotlib.pyplot as plt
+# --- ★数式画像化機能（matplotlib）を削除 ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.units import mm
-from reportlab.lib.utils import ImageReader
-
-# Streamlit CloudなどのGUIがない環境でのエラーを防ぐ設定
-matplotlib.use('Agg')
+# from reportlab.lib.utils import ImageReader # 削除
 
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
@@ -120,49 +115,10 @@ def ensure_japanese_font():
         print(f"Font download error: {e}")
     return None
 
-# --- ★追加機能：数式を画像に変換する関数 ---
-def render_math_to_image(latex_str, fontsize=16): # フォントサイズを少し大きく変更
-    """
-    LaTeX文字列をMatplotlibを使って画像(ImageReader)に変換する。
-    """
-    # Matplotlibで数式を描画
-    fig = plt.figure(figsize=(0.01, 0.01)) # 初期サイズはダミー
-    
-    # 中心に配置するように設定 (ha='center', va='center')
-    text = fig.text(0.5, 0.5, f"${latex_str}$", fontsize=fontsize, ha='center', va='center', usetex=False)
-    
-    # 描画サイズを取得（レンダリングして正確なバウンディングボックスを得る）
-    fig.canvas.draw()
-    bbox = text.get_window_extent()
-    
-    # DPI取得
-    dpi = fig.dpi
-    
-    # インチ単位に変換し、十分な余白(パディング)を持たせる
-    # パディングを増やすことで「文字切れ」や「消えかけ」を物理的に防ぐ
-    padding_x = 0.4  # 左右の余白（インチ）
-    padding_y = 0.4  # 上下の余白（インチ）
-    width_inch = (bbox.width / dpi) + padding_x
-    height_inch = (bbox.height / dpi) + padding_y
-    
-    fig.set_size_inches(width_inch, height_inch)
-    
-    # 再配置（キャンバスサイズ変更後に再度中心に置く）
-    text.set_position((0.5, 0.5))
-    
-    # 画像バッファに出力
-    # transparent=False, facecolor='white' にすることで「かすれ」を防ぎ、くっきりさせる
-    # dpi=600 で印刷品質にする
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=600, transparent=False, facecolor='white')
-    plt.close(fig)
-    buf.seek(0)
-    
-    # 高さ(mm換算)を返す
-    return ImageReader(buf), height_inch * 25.4
+# --- ★数式画像生成関数（render_math_to_image）を削除 ---
 
 def create_pdf(text_content, student_name):
-    """テキストレポートからPDFを作成しバイナリデータとして返す（数式画像対応版）"""
+    """テキストレポートからPDFを作成しバイナリデータとして返す（シンプルテキスト版）"""
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -187,60 +143,28 @@ def create_pdf(text_content, student_name):
     p.setFont(font_name, 11)
     
     lines = text_content.split('\n')
-    # ★修正：行文字数を減らして見切れを防ぐ
+    # 文字数設定（余裕を持って35文字）
     max_char_per_line = 35 
     line_height = 6 * mm
     y_position = height - 50 * mm
     
     for line in lines:
-        line = line.strip()
-        if not line:
+        # シンプルなテキスト描画のみを行う（数式画像処理を削除）
+        while True:
+            chunk = line[:max_char_per_line]
+            line = line[max_char_per_line:]
+            
+            p.drawString(20 * mm, y_position, chunk)
             y_position -= line_height
-            continue
-
-        # --- 数式判定 ($$ ... $$) ---
-        # 行全体が $$...$$ で囲まれているかを判定
-        math_match = re.match(r'^\$\$(.+)\$\$$', line)
-        
-        if math_match:
-            # 数式の場合：画像として描画
-            latex_str = math_match.group(1)
-            try:
-                # フォントサイズを少し上げて視認性向上
-                img_reader, img_height_mm = render_math_to_image(latex_str, fontsize=18)
-                
-                # 改ページ判定
-                if y_position - img_height_mm < 20 * mm:
-                    p.showPage()
-                    p.setFont(font_name, 11)
-                    y_position = height - 30 * mm
-                
-                # 画像を描画
-                # mask='auto' を削除（白背景画像なので不要。これにより描画が安定する）
-                # preserveAspectRatio=True で歪みを防ぐ
-                p.drawImage(img_reader, 25 * mm, y_position - img_height_mm + 2*mm, height=img_height_mm * mm, preserveAspectRatio=True)
-                y_position -= (img_height_mm + 2) * mm # 次の行へ移動
-                
-            except Exception as e:
-                # 失敗時はそのままテキスト描画
-                p.drawString(20 * mm, y_position, line)
-                y_position -= line_height
-        else:
-            # 通常テキストの場合：折り返し描画
-            while True:
-                chunk = line[:max_char_per_line]
-                line = line[max_char_per_line:]
-                
-                if y_position < 20 * mm:
-                    p.showPage()
-                    p.setFont(font_name, 11)
-                    y_position = height - 30 * mm
-                
-                p.drawString(20 * mm, y_position, chunk)
-                y_position -= line_height
-                
-                if not line:
-                    break
+            
+            # 改ページ処理
+            if y_position < 20 * mm:
+                p.showPage()
+                p.setFont(font_name, 11)
+                y_position = height - 30 * mm
+            
+            if not line:
+                break
 
     p.save()
     buffer.seek(0)
@@ -575,7 +499,7 @@ with st.sidebar:
                         st.error(f"計算エラー: {e}")
 
             st.markdown("---")
-            # --- レポート作成機能 (★機能変更：PDF自動生成・自動オープン・数式対応) ---
+            # --- レポート作成機能 (★機能変更：PDF自動生成・自動オープン・テキスト数式対応) ---
             st.markdown("### 📝 学習まとめレポート作成")
             st.caption("生徒用の復習レポート（公式・解法まとめ）を生成し、別タブで開きます。")
             
@@ -631,22 +555,19 @@ with st.sidebar:
                                         content_text = str(raw_content)
                                     conversation_text += f"{role_name}: {content_text}\n"
 
-                                # 2. レポートプロンプト (★改善：インライン数式禁止・Unicode推奨)
+                                # 2. レポートプロンプト (★変更：高校生でも理解できるテキスト数式)
                                 report_system_instruction = f"""
                                 あなたは数学の「学習まとめ作成AI」です。
                                 生徒の「{new_name}」さんが今日学習した内容を復習できるように、簡潔かつ明確なレポートを作成してください。
 
                                 【重要：数式の出力ルール】
-                                PDF生成時の文字化けを防ぐため、以下のルールを厳守してください。
-                                1. **文中の数式には、LaTeX記法（$x^2$, $\\alpha$ など）を絶対に使わないでください。**
-                                   代わりに、Unicode文字を使ってください。
-                                   - 良い例: x², α, β, a+b=c, y = 2x + 1
-                                   - 悪い例: $x^2$, $\\alpha$, $\\beta$
-                                
-                                2. **画像化が必要な複雑な数式（分数、ルート、積分など）のみ、`$$` で囲んで独立した行にしてください。**
-                                   この場合のみLaTeX記法が許されます。
-                                   例:
-                                   $$ x = \\frac{{-b \\pm \\sqrt{{b^2-4ac}}}}{{2a}} $$
+                                厳密なLaTeX表記は使わず、高校生がテキストだけでも理解しやすい記法を使用してください。
+                                - 分数: a/b (または言葉で「b分のa」と補足)
+                                - 2乗: x^2 
+                                - 下付き文字: a_n または a[n]
+                                - ギリシャ文字: α, β (Unicode文字を使用)
+                                - ルート: √ (ルート)
+                                - 例: 解の公式 x = (-b ± √(b^2 - 4ac)) / 2a
 
                                 【出力フォーマット（厳守）】
                                 --------------------------------------------------
@@ -656,7 +577,7 @@ with st.sidebar:
                                 （箇条書きで簡潔に）
 
                                 ■ 重要公式・ポイント
-                                （文中の数式はUnicodeで記述し、複雑な式のみ $$...$$ で独立行に出力）
+                                （わかりやすいテキスト形式で公式を列挙。例: α + β = -b/a）
 
                                 ■ 今日の解法メモ
                                 （具体的にどのような問題に取り組み、どう解決したかを要約）
@@ -664,6 +585,7 @@ with st.sidebar:
                                 ■ 次回へのアドバイス
                                 （励ましのメッセージと、次に復習すべき点）
                                 --------------------------------------------------
+                                ※ マークダウンは使わず、プレーンテキストで見やすく整形してください。
                                 """
                                 
                                 genai.configure(api_key=GEMINI_API_KEY)
@@ -694,7 +616,7 @@ with st.sidebar:
                                 if success_report and report_text:
                                     st.session_state.last_report = report_text
                                     
-                                    # ★重要：ここで直ちにPDFを生成（数式対応版）★
+                                    # ★重要：ここで直ちにPDFを生成（シンプルテキスト版）★
                                     pdf_buffer = create_pdf(report_text, new_name)
                                     pdf_b64 = base64.b64encode(pdf_buffer.getvalue()).decode('utf-8')
                                     
