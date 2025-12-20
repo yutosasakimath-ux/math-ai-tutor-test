@@ -9,14 +9,21 @@ import time
 from PIL import Image
 import os
 import io
-import base64  # ★追加：PDFをブラウザで開くために必要
+import base64
+import re  # 正規表現用
 
-# --- ★追加：PDF生成用ライブラリ ---
+# --- ★追加：数式描画用ライブラリ ---
+import matplotlib
+import matplotlib.pyplot as plt
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
+
+# Streamlit CloudなどのGUIがない環境でのエラーを防ぐ設定
+matplotlib.use('Agg')
 
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
@@ -90,7 +97,7 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# --- ★追加機能：PDF生成とフォント管理 ---
+# --- ★追加機能：フォント管理 ---
 FONT_URL = "https://moji.or.jp/wp-content/ipafont/IPAexfont/ipaexg00401.zip"
 FONT_FILE_NAME = "ipaexg.ttf"
 
@@ -99,7 +106,6 @@ def ensure_japanese_font():
     if os.path.exists(FONT_FILE_NAME):
         return FONT_FILE_NAME
     
-    # Streamlit Cloudなどの環境でフォントがない場合はダウンロード
     try:
         import zipfile
         r = requests.get(FONT_URL)
@@ -114,8 +120,35 @@ def ensure_japanese_font():
         print(f"Font download error: {e}")
     return None
 
+# --- ★追加機能：数式を画像に変換する関数 ---
+def render_math_to_image(latex_str, fontsize=12):
+    """
+    LaTeX文字列をMatplotlibを使って画像(ImageReader)に変換する。
+    """
+    # Matplotlibで数式を描画
+    fig = plt.figure(figsize=(0.1, 0.1)) # 初期サイズはダミー
+    text = fig.text(0, 0, f"${latex_str}$", fontsize=fontsize, usetex=False)
+    
+    # 描画サイズを取得してリサイズ
+    bbox = text.get_window_extent(fig.canvas.get_renderer())
+    bbox_inches = bbox.transformed(fig.dpi_scale_trans.inverted())
+    
+    # 少し余白を持たせる
+    fig.set_size_inches(bbox_inches.width + 0.1, bbox_inches.height + 0.1)
+    text.set_position((0.05, 0.05))
+    
+    # 画像バッファに出力
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=300, transparent=True)
+    plt.close(fig)
+    buf.seek(0)
+    
+    # 高さ(mm換算)を返す
+    height_mm = bbox_inches.height * 25.4
+    return ImageReader(buf), height_mm
+
 def create_pdf(text_content, student_name):
-    """テキストレポートからPDFを作成しバイナリデータとして返す"""
+    """テキストレポートからPDFを作成しバイナリデータとして返す（数式画像対応版）"""
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -136,7 +169,7 @@ def create_pdf(text_content, student_name):
     p.setFont(font_name, 10)
     p.drawString(20 * mm, height - 30 * mm, f"作成日: {datetime.date.today().strftime('%Y/%m/%d')}")
     
-    # 本文描画
+    # 本文設定
     p.setFont(font_name, 11)
     
     lines = text_content.split('\n')
@@ -145,20 +178,51 @@ def create_pdf(text_content, student_name):
     y_position = height - 50 * mm
     
     for line in lines:
-        while True:
-            chunk = line[:max_char_per_line]
-            line = line[max_char_per_line:]
-            
-            p.drawString(20 * mm, y_position, chunk)
+        line = line.strip()
+        if not line:
             y_position -= line_height
-            
-            if y_position < 20 * mm:
-                p.showPage()
-                p.setFont(font_name, 11)
-                y_position = height - 30 * mm
-            
-            if not line:
-                break
+            continue
+
+        # --- 数式判定 ($$ ... $$) ---
+        # 行全体が $$...$$ で囲まれているかを判定
+        math_match = re.match(r'^\$\$(.+)\$\$$', line)
+        
+        if math_match:
+            # 数式の場合：画像として描画
+            latex_str = math_match.group(1)
+            try:
+                img_reader, img_height_mm = render_math_to_image(latex_str, fontsize=14)
+                
+                # 改ページ判定
+                if y_position - img_height_mm < 20 * mm:
+                    p.showPage()
+                    p.setFont(font_name, 11)
+                    y_position = height - 30 * mm
+                
+                # 画像を描画 (X座標は少しインデント)
+                p.drawImage(img_reader, 25 * mm, y_position - img_height_mm + 2*mm, height=img_height_mm * mm, preserveAspectRatio=True, mask='auto')
+                y_position -= (img_height_mm + 4) * mm # 次の行へ移動
+                
+            except Exception as e:
+                # 失敗時はそのままテキスト描画
+                p.drawString(20 * mm, y_position, line)
+                y_position -= line_height
+        else:
+            # 通常テキストの場合：折り返し描画
+            while True:
+                chunk = line[:max_char_per_line]
+                line = line[max_char_per_line:]
+                
+                if y_position < 20 * mm:
+                    p.showPage()
+                    p.setFont(font_name, 11)
+                    y_position = height - 30 * mm
+                
+                p.drawString(20 * mm, y_position, chunk)
+                y_position -= line_height
+                
+                if not line:
+                    break
 
     p.save()
     buffer.seek(0)
@@ -493,7 +557,7 @@ with st.sidebar:
                         st.error(f"計算エラー: {e}")
 
             st.markdown("---")
-            # --- レポート作成機能 (★機能変更：PDF自動生成・自動オープン) ---
+            # --- レポート作成機能 (★機能変更：PDF自動生成・自動オープン・数式対応) ---
             st.markdown("### 📝 学習まとめレポート作成")
             st.caption("生徒用の復習レポート（公式・解法まとめ）を生成し、別タブで開きます。")
             
@@ -549,13 +613,20 @@ with st.sidebar:
                                         content_text = str(raw_content)
                                     conversation_text += f"{role_name}: {content_text}\n"
 
-                                # 2. レポートプロンプト
+                                # 2. レポートプロンプト (数式形式を指定)
                                 report_system_instruction = f"""
                                 あなたは数学の「学習まとめ作成AI」です。
                                 生徒の「{new_name}」さんが今日学習した内容を復習できるように、簡潔かつ明確なレポートを作成してください。
 
-                                【入力情報】
-                                今日の会話ログを提供します。
+                                【重要：数式の出力ルール】
+                                PDFで綺麗に数式を表示するため、以下のルールを厳守してください。
+                                1. 文中の簡単な数式（例: x, y, a=1）はそのまま書いてOKです。
+                                2. **複雑な数式（分数、ルート、2乗など）は、必ず独立した行にし、LaTeX形式で `$$` (ドルマーク2つ) で囲んでください。**
+                                   良い例:
+                                   $$ x = \\frac{{-b \\pm \\sqrt{{b^2-4ac}}}}{{2a}} $$
+                                   
+                                   悪い例:
+                                   x = (-b ± √(b^2-4ac)) / 2a  (読みづらい)
 
                                 【出力フォーマット（厳守）】
                                 --------------------------------------------------
@@ -565,7 +636,7 @@ with st.sidebar:
                                 （箇条書きで簡潔に）
 
                                 ■ 重要公式・ポイント
-                                （会話に出てきた公式や、解法のコツを具体的に列挙。数式はテキスト形式で分かりやすく）
+                                （重要な数式は必ず $$...$$ で囲んで出力してください）
 
                                 ■ 今日の解法メモ
                                 （具体的にどのような問題に取り組み、どう解決したかを要約）
@@ -573,7 +644,6 @@ with st.sidebar:
                                 ■ 次回へのアドバイス
                                 （励ましのメッセージと、次に復習すべき点）
                                 --------------------------------------------------
-                                ※ マークダウンは使わず、プレーンテキストで見やすく整形してください。
                                 """
                                 
                                 genai.configure(api_key=GEMINI_API_KEY)
@@ -604,12 +674,11 @@ with st.sidebar:
                                 if success_report and report_text:
                                     st.session_state.last_report = report_text
                                     
-                                    # ★重要：ここで直ちにPDFを生成し、JavaScriptで別タブを開く★
+                                    # ★重要：ここで直ちにPDFを生成（数式対応版）★
                                     pdf_buffer = create_pdf(report_text, new_name)
                                     pdf_b64 = base64.b64encode(pdf_buffer.getvalue()).decode('utf-8')
                                     
                                     # Blob URLを生成して開くJSスクリプト
-                                    # ※Base64をデコードしてBlob化し、Object URLを作成して開く（Chromeのセキュリティ対策）
                                     js_code = f"""
                                     <script>
                                     (function() {{
@@ -626,7 +695,6 @@ with st.sidebar:
                                     }})();
                                     </script>
                                     """
-                                    # スクリプトを埋め込み（display:noneの要素として）
                                     st.components.v1.html(js_code, height=0)
                                     
                                     st.success(f"レポートを作成し、PDFを別タブで開きました！ (Model: {used_model})")
