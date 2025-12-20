@@ -7,6 +7,15 @@ import json
 import datetime
 import time
 from PIL import Image
+import os
+import io
+
+# --- ★追加：PDF生成用ライブラリ ---
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import mm
 
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
@@ -30,18 +39,17 @@ footer {visibility: hidden;}
     background-color: white;
     z-index: 999;
     margin: 0 auto;
-    max-width: 700px; /* layout="centered"に合わせる */
+    max-width: 700px;
     box-shadow: 0px -2px 10px rgba(0,0,0,0.1);
 }
 
-/* メインコンテンツがフォームに隠れないように余白を開ける */
 .main .block-container {
     padding-bottom: 150px; 
 }
 
-/* --- 画像アップローダーをカメラアイコンにするCSSハック --- */
+/* カメラアイコン化 */
 [data-testid="stFileUploader"] {
-    width: 44px; /* アイコンの幅 */
+    width: 44px;
     margin-top: -2px;
     padding-top: 0;
 }
@@ -50,38 +58,29 @@ footer {visibility: hidden;}
     min-height: 44px;
     background-color: #f0f2f6;
     border: 1px solid #ccc;
-    border-radius: 8px; /* 角丸 */
+    border-radius: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
-    /* 文字を透明にして「Browse files」等を完全に見えなくする */
     color: transparent; 
 }
-
-/* 内部のすべての要素（テキストやボタン）を強制的に消す */
 [data-testid="stFileUploader"] section > * {
     display: none !important;
 }
-
-/* カメラアイコンを表示（透明にした文字色をここで黒に戻す） */
 [data-testid="stFileUploader"] section::after {
     content: "📷"; 
     font-size: 22px;
-    color: black; /* アイコンの色 */
+    color: black;
     display: block;
     cursor: pointer;
 }
-/* アップロード済みファイル情報のリストを消す（スッキリさせるため） */
 [data-testid="stFileUploader"] ul {
     display: none;
 }
-/* アップロードされた時の状態変化 */
 [data-testid="stFileUploader"]:has(input[type="file"]:valid) section {
     background-color: #e0f7fa;
     border-color: #00bcd4;
 }
-
-/* テキストエリアの調整 */
 .stTextArea textarea {
     font-size: 16px;
     padding: 10px;
@@ -90,7 +89,82 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# ★管理者用パスワード
+# --- ★追加機能：PDF生成とフォント管理 ---
+FONT_URL = "https://moji.or.jp/wp-content/ipafont/IPAexfont/ipaexg00401.zip"
+FONT_FILE_NAME = "ipaexg.ttf"
+
+def ensure_japanese_font():
+    """PDF用の日本語フォントが存在するか確認し、なければダウンロードする"""
+    if os.path.exists(FONT_FILE_NAME):
+        return FONT_FILE_NAME
+    
+    # Streamlit Cloudなどの環境でフォントがない場合はダウンロード
+    try:
+        import zipfile
+        r = requests.get(FONT_URL)
+        if r.status_code == 200:
+            z = zipfile.ZipFile(io.BytesIO(r.content))
+            for info in z.infolist():
+                if info.filename.endswith(FONT_FILE_NAME):
+                    info.filename = FONT_FILE_NAME
+                    z.extract(info, path=".")
+                    return FONT_FILE_NAME
+    except Exception as e:
+        # エラー時はログに出すが、画面には出さない（ユーザーを驚かせないため）
+        print(f"Font download error: {e}")
+    return None
+
+def create_pdf(text_content, student_name):
+    """テキストレポートからPDFを作成しバイナリデータとして返す"""
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    
+    # フォント設定
+    font_path = ensure_japanese_font()
+    font_name = "Helvetica" # デフォルト
+    if font_path:
+        try:
+            pdfmetrics.registerFont(TTFont('IPAexGothic', font_path))
+            font_name = 'IPAexGothic'
+        except Exception:
+            pass
+
+    # タイトル
+    p.setFont(font_name, 18)
+    p.drawString(20 * mm, height - 20 * mm, f"学習まとめレポート - {student_name}さん")
+    p.setFont(font_name, 10)
+    p.drawString(20 * mm, height - 30 * mm, f"作成日: {datetime.date.today().strftime('%Y/%m/%d')}")
+    
+    # 本文描画
+    p.setFont(font_name, 11)
+    
+    lines = text_content.split('\n')
+    max_char_per_line = 40 
+    line_height = 6 * mm
+    y_position = height - 50 * mm
+    
+    for line in lines:
+        while True:
+            chunk = line[:max_char_per_line]
+            line = line[max_char_per_line:]
+            
+            p.drawString(20 * mm, y_position, chunk)
+            y_position -= line_height
+            
+            if y_position < 20 * mm:
+                p.showPage()
+                p.setFont(font_name, 11)
+                y_position = height - 30 * mm
+            
+            if not line:
+                break
+
+    p.save()
+    buffer.seek(0)
+    return buffer
+
+# --- Secretsの取得 ---
 if "ADMIN_KEY" in st.secrets:
     ADMIN_KEY = st.secrets["ADMIN_KEY"]
 else:
@@ -106,13 +180,16 @@ if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
             key_dict = dict(st.secrets["firebase"])
+            # secrets.tomlでの改行コード対応
             if "\\n" in key_dict["private_key"]:
                 key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
         else:
-            cred = credentials.Certificate("service_account.json")
-            firebase_admin.initialize_app(cred)
+            # ローカル環境等のフォールバック
+            if os.path.exists("service_account.json"):
+                cred = credentials.Certificate("service_account.json")
+                firebase_admin.initialize_app(cred)
     except Exception as e:
         st.error(f"Firebase接続エラー: {e}")
         st.stop()
@@ -140,17 +217,15 @@ if "last_used_model" not in st.session_state:
 if "last_report" not in st.session_state:
     st.session_state.last_report = ""
 
-# Firestore読み込みコスト削減のためのキャッシュ
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "messages_loaded" not in st.session_state:
     st.session_state.messages_loaded = False
     
-# 【ログ機能追加】デバッグログ表示用セッション変数
 if "debug_logs" not in st.session_state:
     st.session_state.debug_logs = []
 
-# --- 4. UI: ログイン画面（未ログイン時） ---
+# --- 4. UI: ログイン画面 ---
 if st.session_state.user_info is None:
     st.title("🎓 AI数学コーチ：ログイン")
     
@@ -168,7 +243,6 @@ if st.session_state.user_info is None:
                 st.error(f"ログイン失敗: {resp['error']['message']}")
             else:
                 st.session_state.user_info = {"uid": resp["localId"], "email": resp["email"]}
-                # ★修正点：ログイン成功時に、以前のユーザー名キャッシュをクリアして再取得させる
                 if "user_name" in st.session_state:
                     del st.session_state["user_name"]
                 st.success("ログインしました！")
@@ -194,7 +268,6 @@ if st.session_state.user_info is None:
                         if "error" in resp:
                             st.error(f"作成失敗: {resp['error']['message']}")
                         else:
-                            # アカウント作成成功後、すぐにFirestoreに名前を書き込む
                             new_uid = resp["localId"]
                             try:
                                 db.collection("users").document(new_uid).set({
@@ -202,13 +275,11 @@ if st.session_state.user_info is None:
                                     "email": new_email,
                                     "created_at": firestore.SERVER_TIMESTAMP
                                 })
-                                st.success(f"アカウント作成成功！\n名前: {new_name_input}\nEmail: {new_email}\nPass: {new_password}\n\nこの情報を親御さんに送ってください。")
+                                st.success(f"アカウント作成成功！\n名前: {new_name_input}\nEmail: {new_email}\nPass: {new_password}")
                             except Exception as e:
                                 st.error(f"データベース登録エラー: {e}")
-
         elif admin_pass_input:
             st.error("パスワードが違います")
-            
     st.stop()
 
 # =========================================================
@@ -218,33 +289,30 @@ if st.session_state.user_info is None:
 user_id = st.session_state.user_info["uid"]
 user_email = st.session_state.user_info["email"]
 
-# --- 5. Firestoreからユーザーデータ取得 ---
 user_ref = db.collection("users").document(user_id)
-# ログイン直後やリロード時、ここに名前が無ければFirestoreから取得
 if "user_name" not in st.session_state:
-    user_doc = user_ref.get()
-    if not user_doc.exists:
-        # ドキュメントが無い場合（念の為のフォールバック）
-        user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP} 
-        user_ref.set(user_data)
+    try:
+        user_doc = user_ref.get()
+        if not user_doc.exists:
+            user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP} 
+            user_ref.set(user_data)
+            st.session_state.user_name = "ゲスト"
+        else:
+            user_data = user_doc.to_dict()
+            st.session_state.user_name = user_data.get("name", "ゲスト")
+    except Exception as e:
         st.session_state.user_name = "ゲスト"
-    else:
-        user_data = user_doc.to_dict()
-        st.session_state.user_name = user_data.get("name", "ゲスト")
 
 student_name = st.session_state.user_name
 
 api_key = ""
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
-if not api_key:
-    pass
 
 # --- 6. サイドバー ---
 with st.sidebar:
     st.header(f"ようこそ、{student_name}さん")
     
-    # ★修正点：ラベルをわかりやすく変更
     new_name = st.text_input("お名前（AIが呼びかける名前）", value=student_name)
     if new_name != student_name:
         user_ref.update({"name": new_name})
@@ -255,48 +323,40 @@ with st.sidebar:
 
     if st.button("🗑️ 会話履歴を全削除"):
         with st.spinner("履歴を保存して削除中..."):
-            # 【ログ機能追加 1/2】 削除前に現在の会話をアーカイブ保存する
             try:
-                # 全履歴を取得
                 history_stream = user_ref.collection("history").order_by("timestamp").stream()
                 session_logs = []
                 batch = db.batch()
                 doc_count = 0
                 
-                # ドキュメントを走査しながら、保存用リスト作成と削除用バッチ処理を行う
                 for doc in history_stream:
                     data = doc.to_dict()
-                    session_logs.append(data) # アーカイブ用リストに追加
-                    batch.delete(doc.reference) # 削除予約
+                    session_logs.append(data)
+                    batch.delete(doc.reference)
                     doc_count += 1
                     
-                    # バッチサイズの制限（500件）への対応
                     if doc_count >= 400:
                         batch.commit()
                         batch = db.batch()
                         doc_count = 0
                 
-                # 残りのバッチを実行
                 if doc_count > 0:
                     batch.commit()
 
-                # データがあった場合のみアーカイブ保存
                 if session_logs:
                     user_ref.collection("archived_sessions").add({
                         "archived_at": firestore.SERVER_TIMESTAMP,
                         "messages": session_logs,
                         "note": "ユーザーによる全削除時のバックアップ"
                     })
-
             except Exception as e:
-                st.error(f"ログ保存中にエラーが発生しましたが、処理を続行します: {e}")
+                st.error(f"ログ保存エラー: {e}")
 
-            # UI側のリセット処理
             st.session_state.last_report = "" 
             st.session_state.messages = [] 
             st.session_state.messages_loaded = True 
-            st.session_state.debug_logs = [] # 履歴削除時はエラーログも一掃
-            st.success("履歴をリセットしました（ログは保存されました）")
+            st.session_state.debug_logs = [] 
+            st.success("履歴をリセットしました")
             time.sleep(1)
             st.rerun()
 
@@ -305,7 +365,6 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.messages_loaded = False
         st.session_state.debug_logs = []
-        # ★修正点：ログアウト時に名前キャッシュもクリアする
         if "user_name" in st.session_state:
             del st.session_state["user_name"]
         st.rerun()
@@ -326,19 +385,14 @@ with st.sidebar:
             st.success("送信しました。")
 
     st.markdown("---")
-    st.success("👑 モニター会員 (Pro機能有効)")
-    st.caption("現在、テスト期間につき全機能を開放しています。")
 
-    st.markdown("---")
-
-    # 管理者用：保護者レポート作成（兼 管理者ツール）
+    # --- 管理者メニュー ---
     with st.expander("管理者用：管理メニュー"): 
         report_admin_pass = st.text_input("管理者パスワード", type="password", key="report_admin_pass")
         
         if ADMIN_KEY and report_admin_pass == ADMIN_KEY:
             st.info("🔓 管理者モード")
 
-            # --- 使用モデル情報 ---
             st.markdown("### 🤖 モデル稼働状況")
             st.info(f"**最後に使用したモデル:** `{st.session_state.last_used_model}`")
 
@@ -359,13 +413,11 @@ with st.sidebar:
                         
                         st.success("取得成功！")
                         st.code("\n".join(available_models))
-                        
-                        # 自動的にログにも残す
                         st.session_state.debug_logs.append(f"Available Models:\n{', '.join(available_models)}")
                     except Exception as e:
                         st.error(f"取得エラー: {e}")
 
-            # --- デバッグログ (エラー履歴) ---
+            # --- デバッグログ ---
             st.markdown("### 🛠 デバッグログ")
             if st.session_state.debug_logs:
                 for i, log in enumerate(reversed(st.session_state.debug_logs)):
@@ -379,114 +431,87 @@ with st.sidebar:
             
             st.markdown("---")
             
-            # --- 【追加】コスト分析機能 ---
+            # --- コスト分析機能 ---
             st.markdown("### 💰 コスト分析")
             if st.button("📊 ログからコストを試算"):
                 with st.spinner("Firestoreのログを集計中..."):
                     try:
-                        # 1. 料金設定 (Gemini 3.0 Flash: 入力$0.50/1M, 出力$3.00/1M)
-                        INPUT_PRICE_PER_M = 0.50  # USD per 1M tokens
-                        OUTPUT_PRICE_PER_M = 3.00  # USD per 1M tokens
-                        USD_JPY = 155.5            # 1 USD = 155.5 JPY
-                        
-                        # システムプロンプトの概算文字数 (約700文字と仮定)
+                        INPUT_PRICE_PER_M = 0.50 
+                        OUTPUT_PRICE_PER_M = 3.00
+                        USD_JPY = 155.5
                         SYSTEM_PROMPT_EST_LEN = 700 
-                        
-                        # Firestoreからログ取得 (逐次ログがあればそれを、なければ履歴から)
-                        # full_conversation_logs: 全てのログ（削除分含む）
-                        # history: 現在の表示用履歴（削除済みは含まない）
                         
                         logs_ref = user_ref.collection("full_conversation_logs").order_by("timestamp")
                         docs = logs_ref.stream()
                         logs = [d.to_dict() for d in docs]
-                        
-                        data_source = "全保存ログ (full_conversation_logs)"
+                        data_source = "全保存ログ"
                         
                         if not logs:
                             logs_ref = user_ref.collection("history").order_by("timestamp")
                             docs = logs_ref.stream()
                             logs = [d.to_dict() for d in docs]
-                            data_source = "現在の履歴 (history)"
+                            data_source = "現在の履歴"
 
                         if not logs:
                             st.warning("ログデータが見つかりませんでした。")
                         else:
-                            # 2. シミュレーション計算
                             total_input_chars = 0
                             total_output_chars = 0
-                            
-                            # 履歴バッファ（APIは過去の会話も毎回送るため、それを再現）
                             history_buffer_len = 0
                             
                             for log in logs:
                                 content = log.get("content", "")
                                 content_len = len(content)
-                                
-                                # 画像判定 (ログに画像注釈があれば、画像トークン分を加算)
-                                # 画像1枚 ≒ 258トークンだが、ここでは安全側に300文字相当とする
                                 img_cost = 0
                                 if "(※画像を送信しました)" in content:
                                     img_cost = 300
                                 
                                 if log.get("role") == "user":
-                                    # 入力トークン = システム指示 + これまでの履歴 + 今回の入力 + 画像
                                     current_input = SYSTEM_PROMPT_EST_LEN + history_buffer_len + content_len + img_cost
                                     total_input_chars += current_input
-                                    
-                                    # 履歴バッファに追加 (このアプリの実装では画像データ自体は履歴に残らないのでテキスト分のみ累積)
                                     history_buffer_len += content_len
-                                    
                                 elif log.get("role") == "model":
-                                    # 出力トークン = 今回の回答
                                     total_output_chars += content_len
-                                    
-                                    # 履歴バッファに追加
                                     history_buffer_len += content_len
 
-                            # 3. コスト計算 (1文字 ≒ 1トークンと仮定して計算)
-                            # 入力コスト
                             input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
-                            # 出力コスト
                             output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
-                            
                             total_usd = input_cost_usd + output_cost_usd
                             total_jpy = total_usd * USD_JPY
 
-                            # 4. 結果表示
                             st.success(f"試算完了 (ソース: {data_source})")
-                            
                             col_c1, col_c2, col_c3 = st.columns(3)
                             with col_c1:
                                 st.metric("推定総コスト", f"¥ {total_jpy:.2f}")
                             with col_c2:
-                                st.metric("総入力 (文字相当)", f"{total_input_chars:,}")
+                                st.metric("総入力", f"{total_input_chars:,}")
                             with col_c3:
-                                st.metric("総出力 (文字相当)", f"{total_output_chars:,}")
+                                st.metric("総出力", f"{total_output_chars:,}")
                             
-                            st.caption("※ Gemini 3.0 Flash (Preview) 価格で計算。1文字=1トークン換算の概算です。")
-                            st.caption(f"※ 会話ターン数: {len(logs)} 回")
+                            st.caption("※ 概算値です。")
 
                     except Exception as e:
                         st.error(f"計算エラー: {e}")
 
             st.markdown("---")
-            st.markdown("### 📝 レポート作成")
+            # --- レポート作成機能 (生徒向け & PDF即時生成) ---
+            st.markdown("### 📝 学習まとめレポート作成")
+            st.caption("生徒用の復習レポート（公式・解法まとめ）を生成します。")
             
-            if st.button("📝 今日のレポートを作成"):
+            if st.button("📝 今日のレポートを作成＆PDF準備"):
                 if not api_key:
                     st.error("Gemini APIキーを設定してください。")
                 else:
-                    with st.spinner("今日の全履歴（削除分含む）を抽出中..."):
+                    with st.spinner("会話ログを分析し、PDFを作成しています..."):
                         try:
-                            # --- 日本時間 (JST) の本日 0:00 〜 24:00 を厳密に定義 ---
+                            # 1. ログ収集 (JST)
                             jst_tz = datetime.timezone(datetime.timedelta(hours=9))
                             now_jst = datetime.datetime.now(jst_tz)
                             start_of_day_jst = now_jst.replace(hour=0, minute=0, second=0, microsecond=0)
                             end_of_day_jst = start_of_day_jst + datetime.timedelta(days=1)
 
                             all_messages = []
-
-                            # (A) archived_sessions から取得 (削除された履歴)
+                            # (A) archived
                             archived_docs = user_ref.collection("archived_sessions").stream()
                             for doc in archived_docs:
                                 data = doc.to_dict()
@@ -494,12 +519,10 @@ with st.sidebar:
                                 for m in msg_list:
                                     ts = m.get("timestamp")
                                     if ts:
-                                        # Firestoreから取得したdatetimeをJSTに変換
                                         ts_jst = ts.astimezone(jst_tz)
                                         if start_of_day_jst <= ts_jst < end_of_day_jst:
                                             all_messages.append(m)
-
-                            # (B) 現在の history から取得 (まだ削除されていない履歴)
+                            # (B) history
                             history_docs = user_ref.collection("history").order_by("timestamp").stream()
                             for doc in history_docs:
                                 m = doc.to_dict()
@@ -510,9 +533,8 @@ with st.sidebar:
                                         all_messages.append(m)
 
                             if not all_messages:
-                                st.warning("今日の学習履歴（日本時間 0:00〜）が見つかりませんでした。")
+                                st.warning("今日の学習履歴が見つかりませんでした。")
                             else:
-                                # タイムスタンプで全メッセージを時間順に並べ替え
                                 all_messages.sort(key=lambda x: x.get("timestamp") if x.get("timestamp") else datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
 
                                 conversation_text = ""
@@ -528,37 +550,44 @@ with st.sidebar:
                                         content_text = str(raw_content)
                                     conversation_text += f"{role_name}: {content_text}\n"
 
-                                # --- AIによるレポート生成 ---
+                                # 2. 生徒向けレポートプロンプト (20日版仕様)
                                 report_system_instruction = f"""
-                                あなたは学習塾の「保護者への報告担当者」です。
-                                以下の「生徒とAI講師の会話ログ」をもとに、保護者に送るための学習レポートを作成してください。
-                                生徒名は「{new_name}」さんです。
+                                あなたは数学の「学習まとめ作成AI」です。
+                                生徒の「{new_name}」さんが今日学習した内容を復習できるように、簡潔かつ明確なレポートを作成してください。
+
+                                【入力情報】
+                                今日の会話ログを提供します。
+
+                                【出力フォーマット（厳守）】
+                                --------------------------------------------------
+                                【📅 {now_jst.strftime('%Y/%m/%d')} 学習まとめレポート】
                                 
-                                【絶対遵守する出力フォーマット】
+                                ■ 今日学んだ単元
+                                （箇条書きで簡潔に）
+
+                                ■ 重要公式・ポイント
+                                （会話に出てきた公式や、解法のコツを具体的に列挙。数式はテキスト形式で分かりやすく）
+
+                                ■ 今日の解法メモ
+                                （具体的にどのような問題に取り組み、どう解決したかを要約）
+
+                                ■ 次回へのアドバイス
+                                （励ましのメッセージと、次に復習すべき点）
                                 --------------------------------------------------
-                                【📅 本日の学習レポート】
-                                生徒名：{new_name}
-
-                                ■ 学習トピック
-                                （ここに単元名やテーマを簡潔に書く）
-
-                                ■ 理解度スコア
-                                （1〜5の数字）/ 5
-                                （評価理由を1行で簡潔に）
-
-                                ■ 先生からのコメント
-                                （学習の様子、つまずいた点、克服した点などを「です・ます」調で3行程度）
-
-                                ■ 保護者様へのアドバイス（今日のお声がけ）
-                                （家庭でどのような言葉をかければよいか、具体的なセリフ案を「」で1つ提示）
-                                --------------------------------------------------
+                                ※ マークダウンは使わず、プレーンテキストで見やすく整形してください。
                                 """
                                 
                                 genai.configure(api_key=api_key)
-                                REPORT_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp", "gemini-2.5-flash"]
+                                # 最新モデル優先
+                                REPORT_MODELS = [
+                                    "gemini-3-flash-preview", 
+                                    "gemini-2.0-flash-exp", 
+                                    "gemini-1.5-flash", 
+                                    "gemini-1.5-pro"
+                                ]
                                 report_text = ""
                                 success_report = False
-                                error_log = []
+                                used_model = None
                                 
                                 for model_name in REPORT_MODELS:
                                     try:
@@ -567,28 +596,43 @@ with st.sidebar:
                                         if response.text:
                                             report_text = response.text
                                             success_report = True
+                                            used_model = model_name
+                                            st.session_state.debug_logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] ✅ Report generated: {model_name}")
                                             break
                                     except Exception as e:
-                                        error_log.append(f"{model_name}: {str(e)}")
+                                        st.session_state.debug_logs.append(f"⚠️ Report failed ({model_name}): {e}")
                                         continue
                                 
                                 if success_report and report_text:
                                     st.session_state.last_report = report_text
-                                    st.success("本日の全履歴からレポートを作成しました！")
+                                    st.success(f"作成完了！ (Model: {used_model})")
                                 else:
                                     st.error("レポート生成に失敗しました。")
-                                    with st.expander("エラー詳細"):
-                                        st.write(error_log)
 
                         except Exception as e:
                             st.error(f"予期せぬエラー: {e}")
 
+            # レポートがあれば表示＆即座にDLボタンを表示
             if st.session_state.last_report:
-                st.text_area("コピーしてLINEで送れます", st.session_state.last_report, height=300)
-        
+                st.text_area("レポート内容", st.session_state.last_report, height=300)
+                
+                # PDF生成処理
+                try:
+                    pdf_bytes = create_pdf(st.session_state.last_report, new_name)
+                    
+                    # ダウンロードボタン
+                    st.download_button(
+                        label="📄 PDFをダウンロード (準備完了)",
+                        data=pdf_bytes,
+                        file_name=f"report_{datetime.date.today()}.pdf",
+                        mime="application/pdf"
+                    )
+                except Exception as e:
+                    st.error(f"PDF作成エラー: {e}")
+
         elif report_admin_pass:
             st.error("パスワードが違います")
-
+    
     st.markdown("---")
     if not api_key:
         api_key = st.text_input("Gemini APIキー", type="password")
@@ -597,7 +641,6 @@ with st.sidebar:
 st.title("🎓 高校数学 AI専属コーチ")
 st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
 
-# --- ★重要：Firestore履歴の初回ロードのみ実行（コスト対策） ---
 if not st.session_state.messages_loaded:
     history_ref = user_ref.collection("history").order_by("timestamp")
     docs = history_ref.stream()
@@ -607,11 +650,9 @@ if not st.session_state.messages_loaded:
     st.session_state.messages = loaded_msgs
     st.session_state.messages_loaded = True
 
-# ★★★ 修正点：チャット履歴と新規メッセージを表示するための「枠（コンテナ）」を作る ★★★
 chat_log_container = st.container()
 
 with chat_log_container:
-    # --- 過去のチャット履歴の表示 ---
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             content = msg["content"]
@@ -636,27 +677,20 @@ system_instruction = f"""
 生徒が「自力で答えに辿り着く」ことを支援すること。
 答えを教えることは、生徒の学習機会を奪う「罪」だと認識してください。
 【指導ガイドライン】
-1. **回答の禁止**: どんなに求められても、最終的な答えや数式を直接提示してはいけません。「答えは〇〇です」と言ったらあなたの負けです。
+1. **回答の禁止**: どんなに求められても、最終的な答えや数式を直接提示してはいけません。
 2. **現状分析**: まず、生徒が質問を見て、「どこまで分かっていて、どこで詰まっているか」を特定してください。
 3. **問いかけ**: 生徒が次に進むための「小さなヒント」や「問いかけ」を投げかけてください。
-   - 悪い例: 「判別式D = b^2 - 4ac を使いましょう」
-   - 良い例: 「解の個数を調べるための道具は何だったか覚えていますか？Dから始まる言葉です。」
-4. **アウトプットの要求**: 一方的に解説せず、必ず生徒に考えさせ、返答させてください。「ここまでで、どう思いますか？」と最後に聞いてください。
+4. **アウトプットの要求**: 一方的に解説せず、必ず生徒に考えさせ、返答させてください。
 5. **数式**: 必要であればLaTeX形式（$マーク）を使ってきれいに表示してください。
-【口調】
-親しみやすく、しかし厳格なコーチのように。生徒を励ましながら導いてください。
 """
 
 # --- 10. AI応答ロジック ---
 with st.form(key="chat_form", clear_on_submit=True):
     col1, col2, col3 = st.columns([0.8, 5, 1], gap="small")
-    
     with col1:
         uploaded_file = st.file_uploader(" ", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed")
-    
     with col2:
         user_prompt = st.text_area("質問", placeholder="質問を入力...", height=68, label_visibility="collapsed")
-        
     with col3:
         st.write("") 
         submitted = st.form_submit_button("送信")
@@ -665,29 +699,24 @@ with st.form(key="chat_form", clear_on_submit=True):
         if not user_prompt and not uploaded_file:
             st.warning("質問か画像を入力してください")
         elif not api_key:
-            st.warning("サイドバーでGemini APIキーを設定してください。")
+            st.warning("Gemini APIキーが設定されていません。")
         else:
             upload_img_obj = None
             user_msg_content = user_prompt
-            
             if uploaded_file:
                 try:
                     upload_img_obj = Image.open(uploaded_file)
                     user_msg_content += "\n\n(※画像を送信しました)"
-                except Exception as e:
+                except Exception:
                     st.error("画像エラー")
 
-            st.session_state.messages.append({
-                "role": "user",
-                "content": user_msg_content
-            })
+            st.session_state.messages.append({"role": "user", "content": user_msg_content})
             
             user_ref.collection("history").add({
                 "role": "user",
                 "content": user_msg_content,
                 "timestamp": firestore.SERVER_TIMESTAMP
             })
-
             user_ref.collection("full_conversation_logs").add({
                 "role": "user",
                 "content": user_msg_content,
@@ -704,8 +733,7 @@ with st.form(key="chat_form", clear_on_submit=True):
                 with st.spinner("AIコーチが思考中..."):
                     genai.configure(api_key=api_key)
                     history_for_ai = []
-                    
-                    MAX_HISTORY_MESSAGES = 20 
+                    MAX_HISTORY_MESSAGES = 20
                     limited_messages = st.session_state.messages[:-1][-MAX_HISTORY_MESSAGES:]
                     
                     for m in limited_messages: 
@@ -716,6 +744,7 @@ with st.form(key="chat_form", clear_on_submit=True):
                             content_str = str(m["content"])
                         history_for_ai.append({"role": m["role"], "parts": [content_str]})
 
+                    # モデルリスト（20日版と同じ最新構成）
                     PRIORITY_MODELS = [
                         "gemini-3-flash-preview",
                         "gemini-2.0-flash-exp",
@@ -726,13 +755,12 @@ with st.form(key="chat_form", clear_on_submit=True):
                     
                     ai_text = ""
                     success_model = None
-                    error_details = [] 
+                    error_details = []
                     
                     for model_name in PRIORITY_MODELS:
                         try:
                             model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
                             chat = model.start_chat(history=history_for_ai)
-                            
                             inputs = [user_prompt]
                             if upload_img_obj:
                                 inputs.append(upload_img_obj)
@@ -742,20 +770,9 @@ with st.form(key="chat_form", clear_on_submit=True):
                             success_model = model_name
                             break 
                         except Exception as e:
-                            timestamp_str = datetime.datetime.now().strftime('%H:%M:%S')
-                            log_message = f"[{timestamp_str}] ⚠️ {model_name} エラー: {e}"
+                            log_message = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] ⚠️ {model_name} エラー: {e}"
                             error_details.append(log_message)
                             st.session_state.debug_logs.append(log_message)
-                            try:
-                                db.collection("system_logs").add({
-                                    "user_id": user_id,
-                                    "timestamp": firestore.SERVER_TIMESTAMP,
-                                    "error_message": str(e),
-                                    "model_attempted": model_name,
-                                    "type": "generation_error"
-                                })
-                            except:
-                                pass
                             continue
                 
                 if success_model:
@@ -764,18 +781,14 @@ with st.form(key="chat_form", clear_on_submit=True):
                     if success_model != PRIORITY_MODELS[0]:
                         with st.chat_message("assistant"):
                              st.warning(f"Note: 最新モデル ({PRIORITY_MODELS[0]}) が利用できなかったため、{success_model} を使用しました。")
-                    
-                    st.session_state.messages.append({
-                        "role": "model",
-                        "content": ai_text
-                    })
+
+                    st.session_state.messages.append({"role": "model", "content": ai_text})
                     
                     user_ref.collection("history").add({
                         "role": "model",
                         "content": ai_text,
                         "timestamp": firestore.SERVER_TIMESTAMP
                     })
-
                     user_ref.collection("full_conversation_logs").add({
                         "role": "model",
                         "content": ai_text,
@@ -786,8 +799,33 @@ with st.form(key="chat_form", clear_on_submit=True):
                     
                     with st.chat_message("model"):
                         st.markdown(ai_text)
-                    
                     time.sleep(0.1) 
                     st.rerun()
                 else:
                     st.error(f"❌ エラーが発生しました。\n詳細: {error_details}")
+```
+
+### 3. Streamlit Cloudへのデプロイ手順
+
+Streamlit Community Cloudにデプロイする際は、以下の設定が必要です。
+
+1.  GitHubに上記の `app.py` と `requirements.txt` をアップロードします。
+2.  Streamlit Cloudの管理画面でアプリを作成します。
+3.  **Secretsの設定:** 「Advanced Settings」の「Secrets」欄に、以下の形式でキーを設定してください。
+
+```toml
+ADMIN_KEY = "あなたの管理者パスワード"
+FIREBASE_WEB_API_KEY = "FirebaseのWeb APIキー"
+GEMINI_API_KEY = "GeminiのAPIキー"
+
+[firebase]
+type = "service_account"
+project_id = "..."
+private_key_id = "..."
+private_key = "-----BEGIN PRIVATE KEY-----\n..."
+client_email = "..."
+client_id = "..."
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "..."
