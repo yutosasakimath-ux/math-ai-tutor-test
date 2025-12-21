@@ -369,7 +369,11 @@ with st.sidebar:
     with col_nav2:
         if st.button("📝 学習記録", use_container_width=True):
             navigate_to("study_log")
-        if st.button("💬 掲示板", use_container_width=True):
+        # ★変更: バディ -> チーム
+        if st.button("👥 チーム", use_container_width=True):
+            navigate_to("team")
+    
+    if st.button("💬 掲示板", use_container_width=True):
             navigate_to("board")
     
     st.markdown("---")
@@ -456,8 +460,9 @@ def render_portal_page():
     with col2:
         if st.button("📝 学習記録\n(時間を記録)", use_container_width=True):
             navigate_to("study_log")
-        if st.button("🤝 バディ\n(友達と連携)", use_container_width=True):
-            navigate_to("buddy")
+        # ★変更: バディ -> チーム
+        if st.button("👥 チーム\n(みんなで頑張る)", use_container_width=True):
+            navigate_to("team")
     
     st.markdown("---")
     
@@ -586,7 +591,6 @@ def render_study_log_page():
     st.title("📝 学習記録")
     st.write("今日の頑張りを記録しよう！")
     
-    # ★変更: ドロップダウンから整数入力へ
     with st.form("study_log_form"):
         col1, col2 = st.columns(2)
         with col1:
@@ -624,7 +628,6 @@ def render_study_log_page():
                     st.error(f"記録エラー: {e}")
 
     st.markdown("### 📜 直近の履歴（編集・削除）")
-    # 履歴を取得（IDが必要なのでstreamで取得し、IDも保持）
     logs_stream = user_ref.collection("study_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
     
     for log in logs_stream:
@@ -642,7 +645,6 @@ def render_study_log_page():
         h = m_val // 60
         m = m_val % 60
         
-        # ★追加: Expanderによる修正・削除UI
         with st.expander(f"{date_display} - {h}時間{m}分 : {data.get('note', '')[:10]}..."):
             with st.form(f"edit_log_{doc_id}"):
                 st.caption("内容を修正")
@@ -657,12 +659,10 @@ def render_study_log_page():
                             new_total_min = new_h * 60 + new_m
                             diff = new_total_min - m_val
                             
-                            # ログ更新
                             user_ref.collection("study_logs").document(doc_id).update({
                                 "minutes": new_total_min,
                                 "note": new_note
                             })
-                            # 累計時間更新
                             u_snap = user_ref.get()
                             curr_tot = u_snap.to_dict().get("totalStudyMinutes", 0)
                             user_ref.update({"totalStudyMinutes": max(0, curr_tot + diff)})
@@ -676,9 +676,7 @@ def render_study_log_page():
                 with col_del:
                     if st.form_submit_button("削除する", type="primary"):
                         try:
-                            # ログ削除
                             user_ref.collection("study_logs").document(doc_id).delete()
-                            # 累計時間減算
                             u_snap = user_ref.get()
                             curr_tot = u_snap.to_dict().get("totalStudyMinutes", 0)
                             user_ref.update({"totalStudyMinutes": max(0, curr_tot - m_val)})
@@ -690,10 +688,11 @@ def render_study_log_page():
                             st.error(f"削除エラー: {e}")
 
 def render_ranking_page():
-    """ランキング画面 (期間集計対応)"""
+    """ランキング画面 (期間集計 + チーム対抗)"""
     st.title("🏆 学習時間ランキング")
     
-    tab1, tab2, tab3 = st.tabs(["累計", "今週", "今月"])
+    # ★変更: チーム対抗タブを追加
+    tab1, tab2, tab3, tab4 = st.tabs(["個人(累計)", "個人(今週)", "個人(今月)", "👥 チーム対抗"])
     
     all_users = list(db.collection("users").stream())
     user_map = {}
@@ -707,6 +706,7 @@ def render_ranking_page():
             return "匿名ユーザー"
         return original_name
 
+    # --- 個人ランキング (累計) ---
     with tab1:
         ranking_list = []
         for uid, info in user_map.items():
@@ -716,9 +716,10 @@ def render_ranking_page():
                 ranking_list.append({"name": disp_name, "minutes": t_min})
         
         ranking_list.sort(key=lambda x: x["minutes"], reverse=True)
-        st.write("#### 👑 累計学習時間")
+        st.write("#### 👑 個人累計")
         st.table(ranking_list[:20])
 
+    # --- 期間集計ロジック ---
     def aggregate_ranking(start_dt):
         try:
             query = db.collection_group("study_logs").where("timestamp", ">=", start_dt)
@@ -768,6 +769,38 @@ def render_ranking_page():
             st.table(ranking_monthly[:20])
         elif not ranking_monthly:
             st.info("データがありません")
+
+    # --- ★追加: チーム対抗ランキング ---
+    with tab4:
+        st.write("#### 👥 チーム対抗 (累計時間)")
+        try:
+            teams_stream = db.collection("teams").stream()
+            team_rank = []
+            
+            for t in teams_stream:
+                t_data = t.to_dict()
+                members = t_data.get("members", [])
+                
+                # メンバーの累計時間を合算
+                team_total_min = 0
+                for m_uid in members:
+                    if m_uid in user_map:
+                        team_total_min += user_map[m_uid].get("totalStudyMinutes", 0)
+                
+                team_rank.append({
+                    "チーム名": t_data.get("name", "No Name"),
+                    "人数": len(members),
+                    "合計時間(分)": team_total_min
+                })
+            
+            if not team_rank:
+                st.info("チームがまだありません")
+            else:
+                team_rank.sort(key=lambda x: x["合計時間(分)"], reverse=True)
+                st.table(team_rank)
+
+        except Exception as e:
+            st.error(f"チーム情報取得エラー: {e}")
 
 def render_board_page():
     """掲示板画面 (返信機能付き)"""
@@ -854,7 +887,6 @@ def render_board_page():
                     </div>
                     """, unsafe_allow_html=True)
                 
-                # ★修正: clear_on_submit=Trueを追加
                 with st.form(f"comment_form_{post_id}", clear_on_submit=True):
                     c_text = st.text_input("返信コメント", key=f"input_{post_id}")
                     c_anon = st.checkbox("匿名", key=f"anon_{post_id}")
@@ -874,92 +906,113 @@ def render_board_page():
 
             st.markdown("---")
 
-def render_buddy_page():
-    """バディ機能（バディコード＆相互リンク実装）"""
-    st.title("🤝 バディ機能")
-    st.write("友達とバディコードを交換して、チームを結成しよう！")
-
-    # 1. 自分のバディコード生成・取得
+def render_team_page():
+    """チーム機能（旧バディ機能から刷新）"""
+    st.title("👥 チーム機能")
+    
+    # ユーザーのチーム所属状況を確認
     my_doc = user_ref.get().to_dict()
-    my_buddy_code = my_doc.get("buddy_code")
+    my_team_id = my_doc.get("teamId")
     
-    if not my_buddy_code:
-        # コード生成 (UUIDの先頭6文字を大文字で)
-        generated_code = str(uuid.uuid4())[:6].upper()
-        user_ref.update({"buddy_code": generated_code})
-        my_buddy_code = generated_code
-        st.rerun() # リロードして表示
-    
-    st.info(f"🔑 **あなたのバディコード:** `{my_buddy_code}`")
-    st.caption("このコードを友達に教えてあげてください。")
-
-    st.markdown("---")
-
-    # 2. 相手のコード入力
-    with st.form("buddy_add_form", clear_on_submit=True):
-        input_code = st.text_input("友達のバディコードを入力")
-        submit_code = st.form_submit_button("連携する")
+    if my_team_id:
+        # --- 所属している場合 ---
+        team_ref = db.collection("teams").document(my_team_id)
+        team_doc = team_ref.get()
         
-        if submit_code and input_code:
-            input_code = input_code.strip().upper()
-            if input_code == my_buddy_code:
-                st.warning("自分自身のコードは登録できません。")
-            else:
-                # コードからユーザーを検索
-                target_users = db.collection("users").where("buddy_code", "==", input_code).stream()
-                target_user = next(target_users, None)
-                
-                if target_user:
-                    target_uid = target_user.id
-                    target_data = target_user.to_dict()
-                    target_name = target_data.get("name", "名無し")
-                    
-                    # 自分のbuddyIdsに追加
-                    current_buddies = my_doc.get("buddyIds", [])
-                    if target_uid not in current_buddies:
-                        current_buddies.append(target_uid)
-                        user_ref.update({"buddyIds": current_buddies})
-                        st.success(f"「{target_name}」さんをバディリストに追加しました！")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.info(f"「{target_name}」さんは既にリストにいます。")
-                else:
-                    st.error("そのコードのユーザーは見つかりませんでした。")
+        if not team_doc.exists:
+            # チームが消滅している場合などの整合性処理
+            user_ref.update({"teamId": firestore.DELETE_FIELD})
+            st.error("所属していたチームが見つかりません。")
+            st.rerun()
+            return
 
-    st.markdown("### 👥 バディリスト")
-    
-    my_buddy_ids = my_doc.get("buddyIds", [])
-    
-    if not my_buddy_ids:
-        st.write("まだバディはいません。")
+        team_data = team_doc.to_dict()
+        st.subheader(f"チーム名: {team_data.get('name')}")
+        st.info(f"🔑 **チーム招待コード:** `{team_data.get('teamCode')}`")
+        st.caption("友達にこのコードを教えて、チームに招待しよう！")
+        
+        st.markdown("### 📋 メンバーリスト")
+        members = team_data.get("members", [])
+        
+        if members:
+            # メンバー詳細取得
+            for m_uid in members:
+                m_doc = db.collection("users").document(m_uid).get()
+                if m_doc.exists:
+                    m_data = m_doc.to_dict()
+                    m_name = m_data.get("name", "名無し")
+                    m_total = m_data.get("totalStudyMinutes", 0)
+                    
+                    # 自分かどうか
+                    me_mark = " (あなた)" if m_uid == user_id else ""
+                    st.write(f"- **{m_name}**{me_mark} : 累計 {m_total}分")
+        
+        st.markdown("---")
+        if st.button("🚪 チームから脱退する"):
+            # メンバーリストから自分を削除
+            new_members = [m for m in members if m != user_id]
+            team_ref.update({"members": new_members})
+            # 自分のteamId削除
+            user_ref.update({"teamId": firestore.DELETE_FIELD})
+            st.success("脱退しました。")
+            st.rerun()
+
     else:
-        for b_uid in my_buddy_ids:
-            # 相手の情報を取得
-            b_doc_ref = db.collection("users").document(b_uid)
-            b_doc = b_doc_ref.get()
-            if b_doc.exists:
-                b_data = b_doc.to_dict()
-                b_name = b_data.get("name", "名無し")
+        # --- 所属していない場合 ---
+        st.write("チームに参加して、みんなで学習時間を競い合おう！")
+        
+        tab_new, tab_join = st.tabs(["✨ 新規チーム作成", "📩 チームに参加"])
+        
+        with tab_new:
+            with st.form("create_team_form"):
+                t_name = st.text_input("チーム名を決めてください")
+                submit_create = st.form_submit_button("作成して参加")
                 
-                # 相互フォロー確認
-                b_buddy_ids = b_data.get("buddyIds", [])
-                is_mutual = user_id in b_buddy_ids
+                if submit_create and t_name:
+                    # コード生成
+                    t_code = str(uuid.uuid4())[:6].upper() # 簡易的
+                    
+                    # チーム作成
+                    new_team_ref = db.collection("teams").add({
+                        "name": t_name,
+                        "teamCode": t_code,
+                        "members": [user_id],
+                        "createdAt": firestore.SERVER_TIMESTAMP
+                    })
+                    new_team_id = new_team_ref[1].id
+                    
+                    # ユーザー更新
+                    user_ref.update({"teamId": new_team_id})
+                    
+                    st.success(f"チーム「{t_name}」を作成しました！")
+                    st.rerun()
+        
+        with tab_join:
+            with st.form("join_team_form"):
+                input_code = st.text_input("招待コードを入力")
+                submit_join = st.form_submit_button("参加する")
                 
-                with st.container():
-                    col_icon, col_info = st.columns([1, 6])
-                    with col_icon:
-                        if is_mutual:
-                            st.markdown("🤝") # チーム結成
+                if submit_join and input_code:
+                    input_code = input_code.strip().upper()
+                    # コード検索
+                    teams = db.collection("teams").where("teamCode", "==", input_code).stream()
+                    target_team = next(teams, None)
+                    
+                    if target_team:
+                        t_id = target_team.id
+                        t_data = target_team.to_dict()
+                        members = t_data.get("members", [])
+                        
+                        if user_id in members:
+                             st.warning("既に参加しています")
                         else:
-                            st.markdown("➡️") # 片思い
-                    with col_info:
-                        if is_mutual:
-                            st.write(f"**{b_name}** (チーム結成済！🎉)")
-                        else:
-                            st.write(f"**{b_name}** (相手の承認待ち)")
-            else:
-                st.write("退会したユーザー")
+                            members.append(user_id)
+                            db.collection("teams").document(t_id).update({"members": members})
+                            user_ref.update({"teamId": t_id})
+                            st.success(f"チーム「{t_data.get('name')}」に参加しました！")
+                            st.rerun()
+                    else:
+                        st.error("チームが見つかりませんでした。コードを確認してください。")
 
 def render_chat_page():
     """AIコーチ画面（既存ロジック）"""
@@ -1144,7 +1197,7 @@ elif current_page == "ranking":
     render_ranking_page()
 elif current_page == "board":
     render_board_page()
-elif current_page == "buddy":
-    render_buddy_page()
+elif current_page == "team": # ★変更
+    render_team_page()
 else:
     render_portal_page()
