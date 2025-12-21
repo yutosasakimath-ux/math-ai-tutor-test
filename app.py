@@ -688,16 +688,24 @@ def render_study_log_page():
                             st.error(f"削除エラー: {e}")
 
 def render_ranking_page():
-    """ランキング画面 (期間集計 + チーム対抗)"""
+    """ランキング画面 (修正版: 個人/チーム × 日/週/月 の計6パターン + 1位始まり)"""
     st.title("🏆 学習時間ランキング")
     
-    # ★変更: チーム対抗タブを追加
-    tab1, tab2, tab3, tab4 = st.tabs(["個人(累計)", "個人(今週)", "個人(今月)", "👥 チーム対抗"])
+    # タブを6つに分割
+    tabs = st.tabs([
+        "👤 個人(今日)", "👤 個人(今週)", "👤 個人(今月)",
+        "👥 チーム(今日)", "👥 チーム(今週)", "👥 チーム(今月)"
+    ])
     
+    # ユーザー情報の事前ロード
     all_users = list(db.collection("users").stream())
     user_map = {}
     for u in all_users:
         user_map[u.id] = u.to_dict()
+
+    # チーム情報の事前ロード
+    all_teams = list(db.collection("teams").stream())
+    team_list = [{"id": t.id, **t.to_dict()} for t in all_teams]
 
     def get_anonymous_name(uid, original_name, is_anon_flag):
         if is_anon_flag:
@@ -706,101 +714,141 @@ def render_ranking_page():
             return "匿名ユーザー"
         return original_name
 
-    # --- 個人ランキング (累計) ---
-    with tab1:
-        ranking_list = []
-        for uid, info in user_map.items():
-            t_min = info.get("totalStudyMinutes", 0)
-            if t_min > 0:
-                disp_name = get_anonymous_name(uid, info.get("name", "名無し"), info.get("isAnonymousRanking", False))
-                ranking_list.append({"name": disp_name, "minutes": t_min})
-        
-        ranking_list.sort(key=lambda x: x["minutes"], reverse=True)
-        st.write("#### 👑 個人累計")
-        st.table(ranking_list[:20])
+    # --- 集計ロジック (期間指定でユーザーごとの学習時間を集計) ---
+    def get_aggregated_stats(period_type):
+        """
+        指定期間のログを集計し、{uid: total_minutes} の辞書を返す
+        period_type: 'day', 'week', 'month'
+        """
+        now_jst = datetime.datetime.now(JST)
+        start_dt = None
 
-    # --- 期間集計ロジック ---
-    def aggregate_ranking(start_dt):
+        if period_type == 'day':
+            # 今日の0時0分0秒
+            start_dt = now_jst.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period_type == 'week':
+            # 今週の月曜日の0時0分0秒
+            start_dt = (now_jst - datetime.timedelta(days=now_jst.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period_type == 'month':
+            # 今月の1日の0時0分0秒
+            start_dt = now_jst.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        if not start_dt:
+            return {}
+
         try:
+            # Firestoreで期間フィルタ
             query = db.collection_group("study_logs").where("timestamp", ">=", start_dt)
             docs = query.stream()
-            user_stats = {} 
+            
+            stats = {}
             for d in docs:
                 parent_ref = d.reference.parent.parent
                 if parent_ref:
                     uid = parent_ref.id
                     minutes = d.to_dict().get("minutes", 0)
-                    user_stats[uid] = user_stats.get(uid, 0) + minutes
-            
-            ranking_period = []
-            for uid, mins in user_stats.items():
-                if uid in user_map:
-                    info = user_map[uid]
-                    disp_name = get_anonymous_name(uid, info.get("name", "名無し"), info.get("isAnonymousRanking", False))
-                    ranking_period.append({"name": disp_name, "minutes": mins})
-            
-            ranking_period.sort(key=lambda x: x["minutes"], reverse=True)
-            return ranking_period
+                    stats[uid] = stats.get(uid, 0) + minutes
+            return stats
 
         except Exception as e:
             if "indexes?create_composite=" in str(e):
                 st.error("⚠️ 管理者設定が必要です：Firestoreインデックスを作成してください。")
             else:
                 st.error(f"集計エラー: {e}")
-            return []
+            return {}
 
-    with tab2:
-        now_jst = datetime.datetime.now(JST)
-        start_of_week = now_jst - datetime.timedelta(days=now_jst.weekday())
-        start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-        st.write(f"集計期間: {start_of_week.strftime('%m/%d')} 〜")
-        ranking_weekly = aggregate_ranking(start_of_week)
-        if ranking_weekly:
-            st.table(ranking_weekly[:20])
-        elif not ranking_weekly:
-             st.info("データがありません")
-
-    with tab3:
-        now_jst = datetime.datetime.now(JST)
-        start_of_month = now_jst.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        st.write(f"集計期間: {start_of_month.strftime('%m/%d')} 〜")
-        ranking_monthly = aggregate_ranking(start_of_month)
-        if ranking_monthly:
-            st.table(ranking_monthly[:20])
-        elif not ranking_monthly:
+    # --- ランキング表示用関数 ---
+    def display_ranking_table(data_list, value_key="minutes"):
+        """リストデータを受け取り、1位から順にテーブル表示"""
+        if not data_list:
             st.info("データがありません")
+            return
 
-    # --- ★追加: チーム対抗ランキング ---
-    with tab4:
-        st.write("#### 👥 チーム対抗 (累計時間)")
-        try:
-            teams_stream = db.collection("teams").stream()
-            team_rank = []
-            
-            for t in teams_stream:
-                t_data = t.to_dict()
-                members = t_data.get("members", [])
-                
-                # メンバーの累計時間を合算
-                team_total_min = 0
-                for m_uid in members:
-                    if m_uid in user_map:
-                        team_total_min += user_map[m_uid].get("totalStudyMinutes", 0)
-                
-                team_rank.append({
-                    "チーム名": t_data.get("name", "No Name"),
-                    "人数": len(members),
-                    "合計時間(分)": team_total_min
-                })
-            
-            if not team_rank:
-                st.info("チームがまだありません")
-            else:
-                team_rank.sort(key=lambda x: x["合計時間(分)"], reverse=True)
-                st.table(team_rank)
+        # 時間の多い順にソート
+        sorted_data = sorted(data_list, key=lambda x: x[value_key], reverse=True)
+        
+        # 表示用データ作成 (1位から開始)
+        display_rows = []
+        for i, item in enumerate(sorted_data):
+            row = {
+                "順位": f"{i + 1}位",  # ★修正: 0始まりではなく1始まりに
+                "名前": item["name"],
+                "時間(分)": item[value_key]
+            }
+            if "count" in item:
+                row["人数"] = item["count"]
+            display_rows.append(row)
+        
+        st.table(display_rows)
 
-        except Exception as e:
-            st.error(f"チーム情報取得エラー: {e}")
+    # --- データの準備 ---
+    stats_day = get_aggregated_stats('day')
+    stats_week = get_aggregated_stats('week')
+    stats_month = get_aggregated_stats('month')
+
+    # --- 個人ランキング生成 ---
+    def make_personal_list(stats):
+        result = []
+        for uid, mins in stats.items():
+            if uid in user_map:
+                info = user_map[uid]
+                disp_name = get_anonymous_name(uid, info.get("name", "名無し"), info.get("isAnonymousRanking", False))
+                result.append({"name": disp_name, "minutes": mins})
+        return result
+
+    # --- チームランキング生成 ---
+    def make_team_list(stats):
+        result = []
+        for t in team_list:
+            members = t.get("members", [])
+            team_total = 0
+            # チームメンバーの当該期間の学習時間を合計
+            for m_uid in members:
+                team_total += stats.get(m_uid, 0)
+            
+            # 0分のチームも表示するかは任意ですが、ここでは表示します
+            result.append({
+                "name": t.get("name", "No Name"),
+                "minutes": team_total,
+                "count": len(members)
+            })
+        # 0分のチームを除外したい場合はここでフィルタしてください
+        result = [r for r in result if r["minutes"] > 0]
+        return result
+
+    # --- タブへの描画 ---
+    
+    # 1. 個人 (今日)
+    with tabs[0]:
+        st.caption(f"集計期間: {datetime.datetime.now(JST).strftime('%Y/%m/%d')} (今日)")
+        display_ranking_table(make_personal_list(stats_day))
+
+    # 2. 個人 (今週)
+    with tabs[1]:
+        start_week = (datetime.datetime.now(JST) - datetime.timedelta(days=datetime.datetime.now(JST).weekday()))
+        st.caption(f"集計期間: {start_week.strftime('%m/%d')} 〜")
+        display_ranking_table(make_personal_list(stats_week))
+
+    # 3. 個人 (今月)
+    with tabs[2]:
+        start_month = datetime.datetime.now(JST).replace(day=1)
+        st.caption(f"集計期間: {start_month.strftime('%m/%d')} 〜")
+        display_ranking_table(make_personal_list(stats_month))
+
+    # 4. チーム (今日)
+    with tabs[3]:
+        st.caption("チームメンバーの今日の合計時間")
+        display_ranking_table(make_team_list(stats_day))
+
+    # 5. チーム (今週)
+    with tabs[4]:
+        st.caption("チームメンバーの今週の合計時間")
+        display_ranking_table(make_team_list(stats_week))
+
+    # 6. チーム (今月)
+    with tabs[5]:
+        st.caption("チームメンバーの今月の合計時間")
+        display_ranking_table(make_team_list(stats_month))
 
 def render_board_page():
     """掲示板画面 (返信機能付き)"""
