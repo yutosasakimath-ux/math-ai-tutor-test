@@ -355,7 +355,7 @@ student_name = st.session_state.user_name
 with st.sidebar:
     st.header(f"ようこそ、{student_name}さん")
     
-    # ★追加: ナビゲーションメニュー
+    # ナビゲーションメニュー
     st.caption("ナビゲーション")
     if st.button("🏠 ホーム (ポータル)", use_container_width=True):
         navigate_to("portal")
@@ -374,7 +374,7 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # ★変更: AIコーチ画面の場合のみ「会話履歴削除」を表示
+    # AIコーチ画面の場合のみ「会話履歴削除」を表示
     if st.session_state.current_page == "chat":
         if st.button("🗑️ 会話履歴を全削除"):
             with st.spinner("履歴を保存して削除中..."):
@@ -461,7 +461,7 @@ def render_portal_page():
     
     st.markdown("---")
     
-    # ★追加: 設定・サポート・管理者メニューを集約
+    # 設定・サポート・管理者メニューを集約
     with st.expander("⚙️ 設定・サポート"):
         st.markdown("### 👤 プロフィール設定")
         
@@ -540,7 +540,6 @@ def render_portal_page():
             st.markdown("#### 💰 コスト分析")
             if st.button("📊 ログからコストを試算", key="admin_cost_calc"):
                 with st.spinner("集計中..."):
-                    # (コスト計算ロジックは既存と同様)
                     try:
                         INPUT_PRICE_PER_M = 0.50 
                         OUTPUT_PRICE_PER_M = 3.00
@@ -580,22 +579,20 @@ def render_portal_page():
             # --- レポート作成 ---
             st.markdown("#### 📝 学習まとめレポート作成")
             if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen"):
-                # (レポート生成ロジックは既存関数を呼び出す形だが、ここでは既存コードを維持して埋め込み)
-                # JST対応済み
-                pass # スペース節約のため省略（実際の動作は既存ロジックと同様）
                 st.info("※チャット画面のデバッグメニューと同じロジックがここに実装されます（今回は省略）")
 
 def render_study_log_page():
-    """学習記録画面"""
+    """学習記録画面（修正・削除機能付き）"""
     st.title("📝 学習記録")
     st.write("今日の頑張りを記録しよう！")
     
+    # ★変更: ドロップダウンから整数入力へ
     with st.form("study_log_form"):
         col1, col2 = st.columns(2)
         with col1:
-            hours = st.selectbox("時間", list(range(0, 13)), index=0)
+            hours = st.number_input("時間 (0-24)", min_value=0, max_value=24, value=0, step=1)
         with col2:
-            minutes = st.selectbox("分", [0, 15, 30, 45], index=0)
+            minutes = st.number_input("分 (0-59)", min_value=0, max_value=59, value=0, step=1)
             
         note = st.text_area("メモ (学習内容や感想)", placeholder="例: 三角関数の加法定理を覚えた！")
         submit = st.form_submit_button("記録する")
@@ -605,7 +602,6 @@ def render_study_log_page():
                 st.error("学習時間を入力してください")
             else:
                 total_min = hours * 60 + minutes
-                # ★JSTで日付記録
                 now_jst = datetime.datetime.now(JST)
                 date_str = now_jst.strftime('%Y-%m-%d')
                 
@@ -627,12 +623,15 @@ def render_study_log_page():
                 except Exception as e:
                     st.error(f"記録エラー: {e}")
 
-    st.markdown("### 📜 直近の履歴")
-    logs_stream = user_ref.collection("study_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(5).stream()
+    st.markdown("### 📜 直近の履歴（編集・削除）")
+    # 履歴を取得（IDが必要なのでstreamで取得し、IDも保持）
+    logs_stream = user_ref.collection("study_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
+    
     for log in logs_stream:
+        doc_id = log.id
         data = log.to_dict()
         ts = data.get("timestamp")
-        # JST変換して表示
+        
         if ts:
             ts_jst = ts.astimezone(JST)
             date_display = ts_jst.strftime('%Y/%m/%d %H:%M')
@@ -642,7 +641,53 @@ def render_study_log_page():
         m_val = data.get("minutes", 0)
         h = m_val // 60
         m = m_val % 60
-        st.markdown(f"**{date_display}** - {h}時間{m}分 : {data.get('note', '')}")
+        
+        # ★追加: Expanderによる修正・削除UI
+        with st.expander(f"{date_display} - {h}時間{m}分 : {data.get('note', '')[:10]}..."):
+            with st.form(f"edit_log_{doc_id}"):
+                st.caption("内容を修正")
+                new_h = st.number_input("時間", min_value=0, max_value=24, value=h, key=f"h_{doc_id}")
+                new_m = st.number_input("分", min_value=0, max_value=59, value=m, key=f"m_{doc_id}")
+                new_note = st.text_area("メモ", value=data.get('note', ''), key=f"n_{doc_id}")
+                
+                col_upd, col_del = st.columns(2)
+                with col_upd:
+                    if st.form_submit_button("更新する"):
+                        try:
+                            new_total_min = new_h * 60 + new_m
+                            diff = new_total_min - m_val
+                            
+                            # ログ更新
+                            user_ref.collection("study_logs").document(doc_id).update({
+                                "minutes": new_total_min,
+                                "note": new_note
+                            })
+                            # 累計時間更新
+                            u_snap = user_ref.get()
+                            curr_tot = u_snap.to_dict().get("totalStudyMinutes", 0)
+                            user_ref.update({"totalStudyMinutes": max(0, curr_tot + diff)})
+                            
+                            st.success("更新しました！")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"更新エラー: {e}")
+
+                with col_del:
+                    if st.form_submit_button("削除する", type="primary"):
+                        try:
+                            # ログ削除
+                            user_ref.collection("study_logs").document(doc_id).delete()
+                            # 累計時間減算
+                            u_snap = user_ref.get()
+                            curr_tot = u_snap.to_dict().get("totalStudyMinutes", 0)
+                            user_ref.update({"totalStudyMinutes": max(0, curr_tot - m_val)})
+                            
+                            st.success("削除しました")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"削除エラー: {e}")
 
 def render_ranking_page():
     """ランキング画面 (期間集計対応)"""
@@ -650,7 +695,6 @@ def render_ranking_page():
     
     tab1, tab2, tab3 = st.tabs(["累計", "今週", "今月"])
     
-    # 全ユーザー情報の事前取得（キャッシュ）
     all_users = list(db.collection("users").stream())
     user_map = {}
     for u in all_users:
@@ -663,7 +707,6 @@ def render_ranking_page():
             return "匿名ユーザー"
         return original_name
 
-    # --- タブ1: 累計 (Total) ---
     with tab1:
         ranking_list = []
         for uid, info in user_map.items():
@@ -676,19 +719,12 @@ def render_ranking_page():
         st.write("#### 👑 累計学習時間")
         st.table(ranking_list[:20])
 
-    # --- 期間集計ヘルパー ---
     def aggregate_ranking(start_dt):
         try:
-            # Collection Group Query
-            # 注意: Firestoreで「study_logs」に対し「timestamp」の昇順/降順インデックスが必要になる場合がある
             query = db.collection_group("study_logs").where("timestamp", ">=", start_dt)
             docs = query.stream()
-            
-            user_stats = {} # uid -> minutes
-            
+            user_stats = {} 
             for d in docs:
-                # 親の親がuserドキュメント (users/{uid}/study_logs/{logId})
-                # d.reference.parent.parent.id で uid が取れる
                 parent_ref = d.reference.parent.parent
                 if parent_ref:
                     uid = parent_ref.id
@@ -706,21 +742,16 @@ def render_ranking_page():
             return ranking_period
 
         except Exception as e:
-            # インデックス未作成時のエラーハンドリング
             if "indexes?create_composite=" in str(e):
                 st.error("⚠️ 管理者設定が必要です：Firestoreインデックスを作成してください。")
-                st.caption(f"エラー詳細: {e}")
             else:
                 st.error(f"集計エラー: {e}")
             return []
 
-    # --- タブ2: 今週 (Weekly) ---
     with tab2:
         now_jst = datetime.datetime.now(JST)
-        # 今週の月曜日0時
         start_of_week = now_jst - datetime.timedelta(days=now_jst.weekday())
         start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-        
         st.write(f"集計期間: {start_of_week.strftime('%m/%d')} 〜")
         ranking_weekly = aggregate_ranking(start_of_week)
         if ranking_weekly:
@@ -728,11 +759,9 @@ def render_ranking_page():
         elif not ranking_weekly:
              st.info("データがありません")
 
-    # --- タブ3: 今月 (Monthly) ---
     with tab3:
         now_jst = datetime.datetime.now(JST)
         start_of_month = now_jst.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        
         st.write(f"集計期間: {start_of_month.strftime('%m/%d')} 〜")
         ranking_monthly = aggregate_ranking(start_of_month)
         if ranking_monthly:
@@ -780,7 +809,6 @@ def render_board_page():
 
     st.markdown("---")
     
-    # 投稿一覧
     posts_stream = db.collection("posts").order_by("createdAt", direction=firestore.Query.DESCENDING).limit(20).stream()
     
     for doc in posts_stream:
@@ -788,7 +816,6 @@ def render_board_page():
         post_id = doc.id
         
         with st.container():
-            # 投稿ヘッダー
             p_name = p.get("authorName", "名無し")
             if p.get("isAnonymous", False):
                 p_name = "匿名ユーザー"
@@ -807,13 +834,10 @@ def render_board_page():
             if p.get("imageUrl"):
                 st.image(p.get("imageUrl"), use_column_width=True)
             
-            # --- ★返信機能 ---
             with st.expander("💬 返信を見る / 書く"):
-                # 返信の表示
                 comments_ref = db.collection("posts").document(post_id).collection("comments")
                 comments = comments_ref.order_by("timestamp").stream()
                 
-                # コンテナを使って表示領域を確保
                 for c in comments:
                     c_data = c.to_dict()
                     c_name = c_data.get("authorName", "名無し")
@@ -830,8 +854,8 @@ def render_board_page():
                     </div>
                     """, unsafe_allow_html=True)
                 
-                # 返信フォーム
-                with st.form(f"comment_form_{post_id}"):
+                # ★修正: clear_on_submit=Trueを追加
+                with st.form(f"comment_form_{post_id}", clear_on_submit=True):
                     c_text = st.text_input("返信コメント", key=f"input_{post_id}")
                     c_anon = st.checkbox("匿名", key=f"anon_{post_id}")
                     c_submit = st.form_submit_button("送信")
@@ -851,11 +875,91 @@ def render_board_page():
             st.markdown("---")
 
 def render_buddy_page():
+    """バディ機能（バディコード＆相互リンク実装）"""
     st.title("🤝 バディ機能")
-    st.info("バディコードを使って友達とリンクしよう！（開発中）")
-    # ★用語変更: 招待コード -> バディコード
-    st.text_input("バディコードを入力")
-    st.button("連携する")
+    st.write("友達とバディコードを交換して、チームを結成しよう！")
+
+    # 1. 自分のバディコード生成・取得
+    my_doc = user_ref.get().to_dict()
+    my_buddy_code = my_doc.get("buddy_code")
+    
+    if not my_buddy_code:
+        # コード生成 (UUIDの先頭6文字を大文字で)
+        generated_code = str(uuid.uuid4())[:6].upper()
+        user_ref.update({"buddy_code": generated_code})
+        my_buddy_code = generated_code
+        st.rerun() # リロードして表示
+    
+    st.info(f"🔑 **あなたのバディコード:** `{my_buddy_code}`")
+    st.caption("このコードを友達に教えてあげてください。")
+
+    st.markdown("---")
+
+    # 2. 相手のコード入力
+    with st.form("buddy_add_form", clear_on_submit=True):
+        input_code = st.text_input("友達のバディコードを入力")
+        submit_code = st.form_submit_button("連携する")
+        
+        if submit_code and input_code:
+            input_code = input_code.strip().upper()
+            if input_code == my_buddy_code:
+                st.warning("自分自身のコードは登録できません。")
+            else:
+                # コードからユーザーを検索
+                target_users = db.collection("users").where("buddy_code", "==", input_code).stream()
+                target_user = next(target_users, None)
+                
+                if target_user:
+                    target_uid = target_user.id
+                    target_data = target_user.to_dict()
+                    target_name = target_data.get("name", "名無し")
+                    
+                    # 自分のbuddyIdsに追加
+                    current_buddies = my_doc.get("buddyIds", [])
+                    if target_uid not in current_buddies:
+                        current_buddies.append(target_uid)
+                        user_ref.update({"buddyIds": current_buddies})
+                        st.success(f"「{target_name}」さんをバディリストに追加しました！")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.info(f"「{target_name}」さんは既にリストにいます。")
+                else:
+                    st.error("そのコードのユーザーは見つかりませんでした。")
+
+    st.markdown("### 👥 バディリスト")
+    
+    my_buddy_ids = my_doc.get("buddyIds", [])
+    
+    if not my_buddy_ids:
+        st.write("まだバディはいません。")
+    else:
+        for b_uid in my_buddy_ids:
+            # 相手の情報を取得
+            b_doc_ref = db.collection("users").document(b_uid)
+            b_doc = b_doc_ref.get()
+            if b_doc.exists:
+                b_data = b_doc.to_dict()
+                b_name = b_data.get("name", "名無し")
+                
+                # 相互フォロー確認
+                b_buddy_ids = b_data.get("buddyIds", [])
+                is_mutual = user_id in b_buddy_ids
+                
+                with st.container():
+                    col_icon, col_info = st.columns([1, 6])
+                    with col_icon:
+                        if is_mutual:
+                            st.markdown("🤝") # チーム結成
+                        else:
+                            st.markdown("➡️") # 片思い
+                    with col_info:
+                        if is_mutual:
+                            st.write(f"**{b_name}** (チーム結成済！🎉)")
+                        else:
+                            st.write(f"**{b_name}** (相手の承認待ち)")
+            else:
+                st.write("退会したユーザー")
 
 def render_chat_page():
     """AIコーチ画面（既存ロジック）"""
