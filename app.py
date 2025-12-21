@@ -12,6 +12,7 @@ import io
 import base64
 import re  # 正規表現用
 import uuid # UUID生成用
+import pandas as pd # ★追加: ランキング表示の整形用
 
 # --- ★数式画像化機能（matplotlib）を削除 ---
 from reportlab.pdfgen import canvas
@@ -793,7 +794,7 @@ def render_ranking_page():
         display_rows = []
         for i, item in enumerate(sorted_data):
             row = {
-                "順位": f"{i + 1}位",  # ★修正: 0始まりではなく1始まりに
+                "順位": f"{i + 1}位", 
                 "名前": item["name"],
                 "時間(分)": item[value_key]
             }
@@ -801,7 +802,11 @@ def render_ranking_page():
                 row["人数"] = item["count"]
             display_rows.append(row)
         
-        st.table(display_rows)
+        # ★修正: Pandas DataFrameにしてインデックスを制御
+        df = pd.DataFrame(display_rows)
+        if not df.empty:
+            # "順位"列をインデックスに設定することで、左端の0始まりの番号を"1位", "2位"...に置き換える
+            st.table(df.set_index("順位"))
 
     # --- データの準備 ---
     stats_day = get_aggregated_stats('day')
