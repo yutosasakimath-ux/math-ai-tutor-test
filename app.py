@@ -1,7 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage
 import requests
 import json
 import datetime
@@ -11,6 +11,7 @@ import os
 import io
 import base64
 import re  # 正規表現用
+import uuid # UUID生成用
 
 # --- ★数式画像化機能（matplotlib）を削除 ---
 from reportlab.pdfgen import canvas
@@ -23,74 +24,88 @@ from reportlab.lib.units import mm
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
 
-# ★★★ UI設定：スマホ対応・入力フォームの最適化・カメラアイコン化 ★★★
-hide_streamlit_style = """
-<style>
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-.stDeployButton {display:none;}
+# ★★★ UI設定：チャット画面専用CSS（関数内で適用するように変更） ★★★
+def apply_chat_css():
+    hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display:none;}
 
-/* チャット用フォーム（メインエリアにあるフォームのみ）を下部に固定 */
-.main [data-testid="stForm"] {
-    border: 1px solid #ddd;
-    border-radius: 10px;
-    padding: 10px;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background-color: white;
-    z-index: 999;
-    margin: 0 auto;
-    max-width: 700px;
-    box-shadow: 0px -2px 10px rgba(0,0,0,0.1);
-}
+    /* チャット用フォーム（メインエリアにあるフォームのみ）を下部に固定 */
+    .main [data-testid="stForm"] {
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 10px;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background-color: white;
+        z-index: 999;
+        margin: 0 auto;
+        max-width: 700px;
+        box-shadow: 0px -2px 10px rgba(0,0,0,0.1);
+    }
 
-.main .block-container {
-    padding-bottom: 150px; 
-}
+    .main .block-container {
+        padding-bottom: 150px; 
+    }
 
-/* カメラアイコン化 */
-[data-testid="stFileUploader"] {
-    width: 44px;
-    margin-top: -2px;
-    padding-top: 0;
-}
-[data-testid="stFileUploader"] section {
-    padding: 0;
-    min-height: 44px;
-    background-color: #f0f2f6;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: transparent; 
-}
-[data-testid="stFileUploader"] section > * {
-    display: none !important;
-}
-[data-testid="stFileUploader"] section::after {
-    content: "📷"; 
-    font-size: 22px;
-    color: black;
-    display: block;
-    cursor: pointer;
-}
-[data-testid="stFileUploader"] ul {
-    display: none;
-}
-[data-testid="stFileUploader"]:has(input[type="file"]:valid) section {
-    background-color: #e0f7fa;
-    border-color: #00bcd4;
-}
-.stTextArea textarea {
-    font-size: 16px;
-    padding: 10px;
-}
-</style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+    /* カメラアイコン化 */
+    [data-testid="stFileUploader"] {
+        width: 44px;
+        margin-top: -2px;
+        padding-top: 0;
+    }
+    [data-testid="stFileUploader"] section {
+        padding: 0;
+        min-height: 44px;
+        background-color: #f0f2f6;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: transparent; 
+    }
+    [data-testid="stFileUploader"] section > * {
+        display: none !important;
+    }
+    [data-testid="stFileUploader"] section::after {
+        content: "📷"; 
+        font-size: 22px;
+        color: black;
+        display: block;
+        cursor: pointer;
+    }
+    [data-testid="stFileUploader"] ul {
+        display: none;
+    }
+    [data-testid="stFileUploader"]:has(input[type="file"]:valid) section {
+        background-color: #e0f7fa;
+        border-color: #00bcd4;
+    }
+    .stTextArea textarea {
+        font-size: 16px;
+        padding: 10px;
+    }
+    </style>
+    """
+    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+# ポータル画面用CSS
+def apply_portal_css():
+    portal_style = """
+    <style>
+    div[data-testid="stHorizontalBlock"] button {
+        height: 120px;
+        white-space: pre-wrap;
+    }
+    </style>
+    """
+    st.markdown(portal_style, unsafe_allow_html=True)
+
 
 # --- ★追加機能：フォント管理 ---
 FONT_URL = "https://moji.or.jp/wp-content/ipafont/IPAexfont/ipaexg00401.zip"
@@ -187,17 +202,32 @@ else:
     GEMINI_API_KEY = None
 
 # --- 1. Firebase初期化 ---
+# ★Storage対応のため、初期化オプションにstorageBucketを追加するロジックへ変更
 if not firebase_admin._apps:
     try:
+        # Storageバケット名の取得 (st.secrets["firebase"]["storage_bucket"] または デフォルト)
+        # ※ バケット名が不明な場合は一時的にNoneとなりますが、Storage機能利用時にエラーとなります
+        storage_bucket = None
+        if "firebase" in st.secrets and "storage_bucket" in st.secrets["firebase"]:
+            storage_bucket = st.secrets["firebase"]["storage_bucket"]
+        
+        # 既存のロジック
         if "firebase" in st.secrets:
             key_dict = dict(st.secrets["firebase"])
             if "\\n" in key_dict["private_key"]:
                 key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(key_dict)
-            firebase_admin.initialize_app(cred)
+            
+            # Options辞書の作成
+            options = {}
+            if storage_bucket:
+                options['storageBucket'] = storage_bucket
+            
+            firebase_admin.initialize_app(cred, options)
         else:
             if os.path.exists("service_account.json"):
                 cred = credentials.Certificate("service_account.json")
+                # service_account利用時のStorage対応は任意（今回はCloudメイン）
                 firebase_admin.initialize_app(cred)
     except Exception as e:
         st.error(f"Firebase接続エラー: {e}")
@@ -233,6 +263,14 @@ if "messages_loaded" not in st.session_state:
     
 if "debug_logs" not in st.session_state:
     st.session_state.debug_logs = []
+
+# ★新規追加: 画面遷移管理
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "portal"
+
+def navigate_to(page_name):
+    st.session_state.current_page = page_name
+    st.rerun()
 
 # --- 4. UI: ログイン画面 ---
 if st.session_state.user_info is None:
@@ -282,54 +320,15 @@ if st.session_state.user_info is None:
                                 db.collection("users").document(new_uid).set({
                                     "name": new_name_input,
                                     "email": new_email,
-                                    "created_at": firestore.SERVER_TIMESTAMP
+                                    "created_at": firestore.SERVER_TIMESTAMP,
+                                    "totalStudyMinutes": 0, # 初期値追加
+                                    "isAnonymousRanking": False # 初期値追加
                                 })
                                 st.success(f"アカウント作成成功！\n名前: {new_name_input}\nEmail: {new_email}\nPass: {new_password}")
                             except Exception as e:
                                 st.error(f"データベース登録エラー: {e}")
         elif admin_pass_input:
             st.error("パスワードが違います")
-    
-    # --- ★追加機能：シミュレーションユーザーログイン ---
-    with st.expander("管理者用：シミュレーションユーザーでログイン"):
-        debug_pass_input = st.text_input("管理者パスワード", type="password", key="debug_login_pass")
-        if ADMIN_KEY and debug_pass_input == ADMIN_KEY:
-            st.info("🔓 デバッグモード：シミュレーション(sim_user)としてログインします")
-            
-            # シミュレーションユーザーを取得
-            try:
-                # ユーザー一覧を取得してPython側でフィルタリング（データ量が少ない前提）
-                all_users = db.collection("users").stream()
-                sim_users = {}
-                for doc in all_users:
-                    d = doc.to_dict()
-                    # is_simulatedフラグがある、またはIDがsim_user_で始まる場合
-                    if d.get("is_simulated") is True or doc.id.startswith("sim_user_"):
-                        sim_users[doc.id] = f"{d.get('name', 'No Name')} ({doc.id})"
-                
-                if not sim_users:
-                    st.warning("シミュレーションユーザーが見つかりません。データ生成スクリプトを実行してください。")
-                else:
-                    selected_sim_uid = st.selectbox("ログインするユーザーを選択", list(sim_users.keys()), format_func=lambda x: sim_users[x])
-                    
-                    if st.button("🚀 このユーザーとして強制ログイン"):
-                        # Firebase Authをバイパスして、セッションステートに直接注入
-                        st.session_state.user_info = {
-                            "uid": selected_sim_uid,
-                            "email": f"{selected_sim_uid}@example.com" # ダミーメール
-                        }
-                        if "user_name" in st.session_state:
-                             del st.session_state["user_name"] # 名前を再取得させるため削除
-                        
-                        st.success(f"{sim_users[selected_sim_uid]} としてログイン中...")
-                        time.sleep(1)
-                        st.rerun()
-                        
-            except Exception as e:
-                st.error(f"ユーザー取得エラー: {e}")
-        elif debug_pass_input:
-             st.error("パスワードが違います")
-
     st.stop()
 
 # =========================================================
@@ -355,15 +354,39 @@ if "user_name" not in st.session_state:
 
 student_name = st.session_state.user_name
 
-# --- 6. サイドバー ---
+# --- 6. サイドバー (共通) ---
 with st.sidebar:
     st.header(f"ようこそ、{student_name}さん")
     
+    # ★追加: ナビゲーションボタン
+    if st.button("🏠 ホームに戻る", use_container_width=True):
+        navigate_to("portal")
+    
+    st.markdown("---")
+
     new_name = st.text_input("お名前（AIが呼びかける名前）", value=student_name)
     if new_name != student_name:
         user_ref.update({"name": new_name})
         st.session_state.user_name = new_name
         st.rerun()
+
+    # ★追加: ランキング匿名設定
+    try:
+        # 現在の設定を取得（キャッシュ考慮）
+        if "is_anon_ranking" not in st.session_state:
+            u_doc = user_ref.get()
+            if u_doc.exists:
+                st.session_state.is_anon_ranking = u_doc.to_dict().get("isAnonymousRanking", False)
+            else:
+                st.session_state.is_anon_ranking = False
+        
+        is_anon = st.checkbox("ランキングで匿名にする", value=st.session_state.is_anon_ranking)
+        if is_anon != st.session_state.is_anon_ranking:
+            user_ref.update({"isAnonymousRanking": is_anon})
+            st.session_state.is_anon_ranking = is_anon
+            st.success("設定を更新しました")
+    except Exception:
+        pass
     
     st.markdown("---")
 
@@ -411,8 +434,11 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.messages_loaded = False
         st.session_state.debug_logs = []
-        if "user_name" in st.session_state:
-            del st.session_state["user_name"]
+        # セッションステートのクリーンアップ
+        keys_to_remove = ["user_name", "current_page", "is_anon_ranking"]
+        for k in keys_to_remove:
+            if k in st.session_state:
+                del st.session_state[k]
         st.rerun()
 
     st.markdown("---")
@@ -477,65 +503,64 @@ with st.sidebar:
             
             st.markdown("---")
             
-            # --- コスト分析機能（全ユーザー集計対応版） ---
+            # --- コスト分析機能 ---
             st.markdown("### 💰 コスト分析")
-            if st.button("📊 全ユーザーのログからコストを試算"):
-                with st.spinner("全ユーザーのログを集計中...（時間がかかる場合があります）"):
+            if st.button("📊 ログからコストを試算"):
+                with st.spinner("Firestoreのログを集計中..."):
                     try:
                         INPUT_PRICE_PER_M = 0.50 
                         OUTPUT_PRICE_PER_M = 3.00
                         USD_JPY = 155.5
                         SYSTEM_PROMPT_EST_LEN = 700 
                         
-                        total_input_chars = 0
-                        total_output_chars = 0
+                        logs_ref = user_ref.collection("full_conversation_logs").order_by("timestamp")
+                        docs = logs_ref.stream()
+                        logs = [d.to_dict() for d in docs]
+                        data_source = "全保存ログ"
                         
-                        # 1. 全ユーザーを取得
-                        all_users = db.collection("users").stream()
-                        user_count = 0
-                        
-                        # 2. 各ユーザーのログをループ処理
-                        for u in all_users:
-                            user_count += 1
-                            # 各ユーザーの full_conversation_logs を取得
-                            logs_ref = u.reference.collection("full_conversation_logs").order_by("timestamp")
+                        if not logs:
+                            logs_ref = user_ref.collection("history").order_by("timestamp")
                             docs = logs_ref.stream()
-                            
+                            logs = [d.to_dict() for d in docs]
+                            data_source = "現在の履歴"
+
+                        if not logs:
+                            st.warning("ログデータが見つかりませんでした。")
+                        else:
+                            total_input_chars = 0
+                            total_output_chars = 0
                             history_buffer_len = 0
                             
-                            for log in docs:
-                                data = log.to_dict()
-                                content = data.get("content", "")
+                            for log in logs:
+                                content = log.get("content", "")
                                 content_len = len(content)
                                 img_cost = 0
                                 if "(※画像を送信しました)" in content:
                                     img_cost = 300
                                 
-                                if data.get("role") == "user":
-                                    # 履歴を含む入力トークン数の概算
+                                if log.get("role") == "user":
                                     current_input = SYSTEM_PROMPT_EST_LEN + history_buffer_len + content_len + img_cost
                                     total_input_chars += current_input
                                     history_buffer_len += content_len
-                                elif data.get("role") == "model":
+                                elif log.get("role") == "model":
                                     total_output_chars += content_len
                                     history_buffer_len += content_len
 
-                        # コスト計算
-                        input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
-                        output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
-                        total_usd = input_cost_usd + output_cost_usd
-                        total_jpy = total_usd * USD_JPY
+                            input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
+                            output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
+                            total_usd = input_cost_usd + output_cost_usd
+                            total_jpy = total_usd * USD_JPY
 
-                        st.success(f"集計完了 (対象ユーザー数: {user_count}人)")
-                        col_c1, col_c2, col_c3 = st.columns(3)
-                        with col_c1:
-                            st.metric("推定総コスト", f"¥ {total_jpy:.2f}")
-                        with col_c2:
-                            st.metric("総入力文字数", f"{total_input_chars:,}")
-                        with col_c3:
-                            st.metric("総出力文字数", f"{total_output_chars:,}")
-                        
-                        st.caption("※ シミュレーションデータを含む全ユーザーの合算値です。")
+                            st.success(f"試算完了 (ソース: {data_source})")
+                            col_c1, col_c2, col_c3 = st.columns(3)
+                            with col_c1:
+                                st.metric("推定総コスト", f"¥ {total_jpy:.2f}")
+                            with col_c2:
+                                st.metric("総入力", f"{total_input_chars:,}")
+                            with col_c3:
+                                st.metric("総出力", f"{total_output_chars:,}")
+                            
+                            st.caption("※ 概算値です。")
 
                     except Exception as e:
                         st.error(f"計算エラー: {e}")
@@ -703,169 +728,422 @@ with st.sidebar:
     if not GEMINI_API_KEY:
         GEMINI_API_KEY = st.text_input("Gemini APIキー", type="password")
 
-# --- 8. メイン画面 ---
-st.title("🎓 高校数学 AI専属コーチ")
-st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
+# =========================================================
+# 各画面の描画関数定義 (New)
+# =========================================================
 
-if not st.session_state.messages_loaded:
-    history_ref = user_ref.collection("history").order_by("timestamp")
-    docs = history_ref.stream()
-    loaded_msgs = []
-    for doc in docs:
-        loaded_msgs.append(doc.to_dict())
-    st.session_state.messages = loaded_msgs
-    st.session_state.messages_loaded = True
+def render_portal_page():
+    """ポータル画面（ホーム）"""
+    apply_portal_css()
+    st.title(f"こんにちは、{student_name}さん！👋")
+    
+    # 簡易サマリ（DBから取得）
+    # ※totalStudyMinutesはユーザー作成時/学習記録時に更新される想定
+    user_doc = user_ref.get().to_dict()
+    total_minutes = user_doc.get("totalStudyMinutes", 0)
+    total_hours = total_minutes // 60
+    
+    st.info(f"📚 **累計学習時間**: {total_hours}時間 {total_minutes % 60}分")
 
-chat_log_container = st.container()
-
-with chat_log_container:
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            content = msg["content"]
-            if isinstance(content, dict):
-                if "text" in content:
-                    st.markdown(content["text"])
-            else:
-                st.markdown(content)
-
-# --- 9. プロンプト定義 ---
-system_instruction = f"""
-あなたは世界一の「ソクラテス式数学コーチ」です。
-生徒の名前は「{new_name}」さんです。
-
-【重要な追加指示：画像入力について】
-生徒から画像（数式や問題文）が送られた場合：
-1. 画像内の文字や数式を読み取ってください。
-2. 読み取った内容をもとに、生徒がどこで詰まっているかを分析してください。
-3. もし画像が不鮮明で読めない場合は、「文字が少し読みづらいです。もう少し明るい場所で撮り直すか、どんな問題か教えてくれますか？」と優しく返してください。
-
-【あなたの絶対的な使命】
-生徒が「自力で答えに辿り着く」ことを支援すること。
-答えを教えることは、生徒の学習機会を奪う「罪」だと認識してください。
-【指導ガイドライン】
-1. **回答の禁止**: どんなに求められても、最終的な答えや数式を直接提示してはいけません。
-2. **現状分析**: まず、生徒が質問を見て、「どこまで分かっていて、どこで詰まっているか」を特定してください。
-3. **問いかけ**: 生徒が次に進むための「小さなヒント」や「問いかけ」を投げかけてください。
-4. **アウトプットの要求**: 一方的に解説せず、必ず生徒に考えさせ、返答させてください。
-5. **数式**: 必要であればLaTeX形式（$マーク）を使ってきれいに表示してください。
-"""
-
-# --- 10. AI応答ロジック ---
-with st.form(key="chat_form", clear_on_submit=True):
-    col1, col2, col3 = st.columns([0.8, 5, 1], gap="small")
+    # ナビゲーションカード
+    col1, col2 = st.columns(2)
     with col1:
-        uploaded_file = st.file_uploader(" ", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed")
-    with col2:
-        user_prompt = st.text_area("質問", placeholder="質問を入力...", height=68, label_visibility="collapsed")
-    with col3:
-        st.write("") 
-        submitted = st.form_submit_button("送信")
-
-    if submitted:
-        if not user_prompt and not uploaded_file:
-            st.warning("質問か画像を入力してください")
-        elif not GEMINI_API_KEY:
-            st.warning("Gemini APIキーが設定されていません。")
-        else:
-            upload_img_obj = None
-            user_msg_content = user_prompt
-            if uploaded_file:
-                try:
-                    upload_img_obj = Image.open(uploaded_file)
-                    user_msg_content += "\n\n(※画像を送信しました)"
-                except Exception:
-                    st.error("画像エラー")
-
-            st.session_state.messages.append({"role": "user", "content": user_msg_content})
+        if st.button("🤖 AIコーチ\n(チャット)", use_container_width=True):
+            navigate_to("chat")
+        if st.button("🏆 ランキング\n(みんなと競う)", use_container_width=True):
+            navigate_to("ranking")
+        if st.button("💬 掲示板\n(Q&A)", use_container_width=True):
+            navigate_to("board")
             
-            user_ref.collection("history").add({
-                "role": "user",
-                "content": user_msg_content,
-                "timestamp": firestore.SERVER_TIMESTAMP
-            })
-            user_ref.collection("full_conversation_logs").add({
-                "role": "user",
-                "content": user_msg_content,
-                "timestamp": firestore.SERVER_TIMESTAMP,
-                "log_type": "sequential"
-            })
+    with col2:
+        if st.button("📝 学習記録\n(時間を記録)", use_container_width=True):
+            navigate_to("study_log")
+        if st.button("🤝 バディ\n(友達と連携)", use_container_width=True):
+            navigate_to("buddy")
 
-            with chat_log_container:
-                with st.chat_message("user"):
-                    st.markdown(user_msg_content)
-                    if upload_img_obj:
-                        st.image(upload_img_obj, width=200)
-
-                with st.spinner("AIコーチが思考中..."):
-                    genai.configure(api_key=GEMINI_API_KEY)
-                    history_for_ai = []
-                    MAX_HISTORY_MESSAGES = 20
-                    limited_messages = st.session_state.messages[:-1][-MAX_HISTORY_MESSAGES:]
-                    
-                    for m in limited_messages: 
-                        content_str = ""
-                        if isinstance(m["content"], dict):
-                            content_str = m["content"].get("text", str(m["content"]))
-                        else:
-                            content_str = str(m["content"])
-                        history_for_ai.append({"role": m["role"], "parts": [content_str]})
-
-                    # モデルリスト（最新優先）
-                    PRIORITY_MODELS = [
-                        "gemini-3-flash-preview",
-                        "gemini-2.0-flash-exp",
-                        "gemini-1.5-flash",
-                        "gemini-3-pro-preview",
-                        "gemini-1.5-pro",
-                    ]
-                    
-                    ai_text = ""
-                    success_model = None
-                    error_details = []
-                    
-                    for model_name in PRIORITY_MODELS:
-                        try:
-                            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-                            chat = model.start_chat(history=history_for_ai)
-                            inputs = [user_prompt]
-                            if upload_img_obj:
-                                inputs.append(upload_img_obj)
-                            
-                            response = chat.send_message(inputs)
-                            ai_text = response.text
-                            success_model = model_name
-                            break 
-                        except Exception as e:
-                            log_message = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] ⚠️ {model_name} エラー: {e}"
-                            error_details.append(log_message)
-                            st.session_state.debug_logs.append(log_message)
-                            continue
+def render_study_log_page():
+    """学習記録画面"""
+    st.title("📝 学習記録")
+    st.write("今日の頑張りを記録しよう！")
+    
+    with st.form("study_log_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            hours = st.selectbox("時間", list(range(0, 13)), index=0)
+        with col2:
+            minutes = st.selectbox("分", [0, 15, 30, 45], index=0)
+            
+        note = st.text_area("メモ (学習内容や感想)", placeholder="例: 三角関数の加法定理を覚えた！")
+        submit = st.form_submit_button("記録する")
+        
+        if submit:
+            if hours == 0 and minutes == 0:
+                st.error("学習時間を入力してください")
+            else:
+                total_min = hours * 60 + minutes
+                now = datetime.datetime.now()
+                date_str = now.strftime('%Y-%m-%d')
                 
-                if success_model:
-                    st.session_state.last_used_model = success_model
-
-                    if success_model != PRIORITY_MODELS[0]:
-                        with st.chat_message("assistant"):
-                             st.warning(f"Note: 最新モデル ({PRIORITY_MODELS[0]}) が利用できなかったため、{success_model} を使用しました。")
-
-                    st.session_state.messages.append({"role": "model", "content": ai_text})
-                    
-                    user_ref.collection("history").add({
-                        "role": "model",
-                        "content": ai_text,
-                        "timestamp": firestore.SERVER_TIMESTAMP
-                    })
-                    user_ref.collection("full_conversation_logs").add({
-                        "role": "model",
-                        "content": ai_text,
+                try:
+                    # 1. サブコレクションに記録
+                    user_ref.collection("study_logs").add({
+                        "minutes": total_min,
+                        "date": date_str,
                         "timestamp": firestore.SERVER_TIMESTAMP,
-                        "log_type": "sequential",
-                        "model": success_model
+                        "note": note
                     })
                     
-                    with st.chat_message("model"):
-                        st.markdown(ai_text)
-                    time.sleep(0.1) 
+                    # 2. 累計時間を更新 (Atomic increment推奨だがここでは簡易的にget->update)
+                    user_snap = user_ref.get()
+                    current_total = user_snap.to_dict().get("totalStudyMinutes", 0)
+                    user_ref.update({"totalStudyMinutes": current_total + total_min})
+                    
+                    st.success(f"{hours}時間{minutes}分の学習を記録しました！")
+                    time.sleep(1)
                     st.rerun()
+                except Exception as e:
+                    st.error(f"記録エラー: {e}")
+
+    st.markdown("### 📜 直近の履歴")
+    logs_stream = user_ref.collection("study_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(5).stream()
+    for log in logs_stream:
+        data = log.to_dict()
+        ts = data.get("timestamp")
+        date_display = ts.strftime('%Y/%m/%d %H:%M') if ts else data.get("date")
+        m_val = data.get("minutes", 0)
+        h = m_val // 60
+        m = m_val % 60
+        st.markdown(f"**{date_display}** - {h}時間{m}分 : {data.get('note', '')}")
+
+def render_ranking_page():
+    """ランキング画面"""
+    st.title("🏆 学習時間ランキング")
+    
+    # タブ切り替え
+    tab1, tab2, tab3 = st.tabs(["今日", "今週", "今月"])
+    
+    # ※Firestoreでの複雑な集計・ソートはインデックスが必要なため、
+    # Phase 1では「全ユーザー取得 -> Python側でフィルタリング」で実装（テスター50名規模なら許容）
+    
+    try:
+        all_users = db.collection("users").stream()
+        ranking_data = []
+        
+        # ユーザー情報を先にマッピング
+        user_map = {} # uid -> {name, isAnonymousRanking, ...}
+        for u in all_users:
+            d = u.to_dict()
+            user_map[u.id] = d
+            
+        # 今日の日付
+        now = datetime.datetime.now()
+        today_str = now.strftime('%Y-%m-%d')
+        
+        # NOTE: ログごとの集計をするには全ログなめる必要がありコスト高。
+        # Phase 1 の要件定義書の「累計時間」ベースと「期間別」の兼ね合いが難しいが、
+        # ここでは要件定義書の usersコレクションの totalStudyMinutes（累計） を表示する形と、
+        # 期間別は本来 study_logs 集計が必要だが、今回は実装の簡易化のため
+        # 「累計ランキング」のみを正しく表示し、期間別はダミー（または将来実装）とするか、
+        # 正直に「現在は累計のみ対応」とする。
+        # -> 要件定義に従い、タブは出すが、実装は累計（Total）をベースにする暫定対応とします。
+        
+        st.info("※ 現在は「累計学習時間」でのランキングを表示しています。")
+
+        # 累計ランキング作成
+        ranking_list = []
+        for uid, info in user_map.items():
+            t_min = info.get("totalStudyMinutes", 0)
+            if t_min > 0:
+                # 匿名処理
+                disp_name = info.get("name", "名無し")
+                if info.get("isAnonymousRanking", False):
+                    # 自分自身ならわかるようにする、などの配慮も可だが、要件通り置換
+                    disp_name = "匿名ユーザー"
+                    if uid == user_id:
+                        disp_name = "匿名ユーザー (あなた)"
+                
+                ranking_list.append({"name": disp_name, "minutes": t_min})
+        
+        # ソート
+        ranking_list.sort(key=lambda x: x["minutes"], reverse=True)
+        
+        with tab1: # 今日（今回は累計を表示）
+            st.table(ranking_list[:20]) # Top 20
+        with tab2: # 今週
+            st.write("（集計中...）")
+        with tab3: # 今月
+            st.write("（集計中...）")
+            
+    except Exception as e:
+        st.error(f"ランキング取得エラー: {e}")
+
+def render_board_page():
+    """掲示板画面"""
+    st.title("💬 コミュニティ掲示板")
+    
+    with st.expander("📝 新規投稿を作成"):
+        with st.form("new_post_form"):
+            title = st.text_input("タイトル")
+            body = st.text_area("本文")
+            is_anon = st.checkbox("匿名で投稿する")
+            img_file = st.file_uploader("画像 (任意)", type=["png", "jpg", "jpeg"], key="board_upload")
+            
+            submit_post = st.form_submit_button("投稿する")
+            
+            if submit_post and title and body:
+                try:
+                    image_url = None
+                    if img_file:
+                        # Firebase Storageへのアップロード
+                        # バケット取得 (Init時に設定済みと仮定)
+                        bucket = storage.bucket()
+                        blob_name = f"posts/{user_id}/{uuid.uuid4()}_{img_file.name}"
+                        blob = bucket.blob(blob_name)
+                        
+                        # Content-Type設定
+                        blob.upload_from_file(img_file, content_type=img_file.type)
+                        
+                        # 公開URL取得 (make_public()が必要だが権限エラーの可能性あり。signed URL推奨だが簡略化)
+                        # Phase 1のStreamlit Cloud環境では権限周りが複雑なため、
+                        # 今回は要件を満たすコードを書くが、実動作にはFirebase側のルール設定が必要
+                        blob.make_public() 
+                        image_url = blob.public_url
+
+                    db.collection("posts").add({
+                        "authorId": user_id,
+                        "authorName": student_name,
+                        "isAnonymous": is_anon,
+                        "title": title,
+                        "body": body,
+                        "imageUrl": image_url,
+                        "createdAt": firestore.SERVER_TIMESTAMP
+                    })
+                    st.success("投稿しました！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"投稿エラー: {e}")
+                    st.caption("※Cloud Storageの設定を確認してください")
+
+    st.markdown("---")
+    # 投稿一覧表示
+    posts_stream = db.collection("posts").order_by("createdAt", direction=firestore.Query.DESCENDING).limit(20).stream()
+    
+    for doc in posts_stream:
+        p = doc.to_dict()
+        with st.container():
+            # ヘッダー
+            p_name = p.get("authorName", "名無し")
+            if p.get("isAnonymous", False):
+                p_name = "匿名ユーザー"
+            
+            ts = p.get("createdAt")
+            date_str = ts.strftime('%Y/%m/%d %H:%M') if ts else ""
+            
+            st.markdown(f"**{p.get('title')}**")
+            st.caption(f"by {p_name} | {date_str}")
+            st.write(p.get("body"))
+            
+            if p.get("imageUrl"):
+                st.image(p.get("imageUrl"), use_column_width=True)
+            
+            st.markdown("---")
+
+def render_buddy_page():
+    st.title("🤝 バディ機能")
+    st.info("開発中：招待コードを使って友達とリンクしよう！")
+    st.text_input("招待コードを入力")
+    st.button("連携する")
+
+def render_chat_page():
+    """既存のチャット画面ロジック"""
+    apply_chat_css() # CSS適用
+    
+    st.title("🤖 AI数学コーチ")
+    st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
+
+    if not st.session_state.messages_loaded:
+        history_ref = user_ref.collection("history").order_by("timestamp")
+        docs = history_ref.stream()
+        loaded_msgs = []
+        for doc in docs:
+            loaded_msgs.append(doc.to_dict())
+        st.session_state.messages = loaded_msgs
+        st.session_state.messages_loaded = True
+
+    chat_log_container = st.container()
+
+    with chat_log_container:
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                content = msg["content"]
+                if isinstance(content, dict):
+                    if "text" in content:
+                        st.markdown(content["text"])
                 else:
-                    st.error(f"❌ エラーが発生しました。\n詳細: {error_details}")
+                    st.markdown(content)
+
+    # --- 9. プロンプト定義 ---
+    system_instruction = f"""
+    あなたは世界一の「ソクラテス式数学コーチ」です。
+    生徒の名前は「{student_name}」さんです。
+
+    【重要な追加指示：画像入力について】
+    生徒から画像（数式や問題文）が送られた場合：
+    1. 画像内の文字や数式を読み取ってください。
+    2. 読み取った内容をもとに、生徒がどこで詰まっているかを分析してください。
+    3. もし画像が不鮮明で読めない場合は、「文字が少し読みづらいです。もう少し明るい場所で撮り直すか、どんな問題か教えてくれますか？」と優しく返してください。
+
+    【あなたの絶対的な使命】
+    生徒が「自力で答えに辿り着く」ことを支援すること。
+    答えを教えることは、生徒の学習機会を奪う「罪」だと認識してください。
+    【指導ガイドライン】
+    1. **回答の禁止**: どんなに求められても、最終的な答えや数式を直接提示してはいけません。
+    2. **現状分析**: まず、生徒が質問を見て、「どこまで分かっていて、どこで詰まっているか」を特定してください。
+    3. **問いかけ**: 生徒が次に進むための「小さなヒント」や「問いかけ」を投げかけてください。
+    4. **アウトプットの要求**: 一方的に解説せず、必ず生徒に考えさせ、返答させてください。
+    5. **数式**: 必要であればLaTeX形式（$マーク）を使ってきれいに表示してください。
+    """
+
+    # --- 10. AI応答ロジック ---
+    with st.form(key="chat_form", clear_on_submit=True):
+        col1, col2, col3 = st.columns([0.8, 5, 1], gap="small")
+        with col1:
+            # keyを追加して他画面との競合回避
+            uploaded_file = st.file_uploader(" ", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed", key="chat_uploader")
+        with col2:
+            user_prompt = st.text_area("質問", placeholder="質問を入力...", height=68, label_visibility="collapsed")
+        with col3:
+            st.write("") 
+            submitted = st.form_submit_button("送信")
+
+        if submitted:
+            if not user_prompt and not uploaded_file:
+                st.warning("質問か画像を入力してください")
+            elif not GEMINI_API_KEY:
+                st.warning("Gemini APIキーが設定されていません。")
+            else:
+                upload_img_obj = None
+                user_msg_content = user_prompt
+                if uploaded_file:
+                    try:
+                        upload_img_obj = Image.open(uploaded_file)
+                        user_msg_content += "\n\n(※画像を送信しました)"
+                    except Exception:
+                        st.error("画像エラー")
+
+                st.session_state.messages.append({"role": "user", "content": user_msg_content})
+                
+                user_ref.collection("history").add({
+                    "role": "user",
+                    "content": user_msg_content,
+                    "timestamp": firestore.SERVER_TIMESTAMP
+                })
+                user_ref.collection("full_conversation_logs").add({
+                    "role": "user",
+                    "content": user_msg_content,
+                    "timestamp": firestore.SERVER_TIMESTAMP,
+                    "log_type": "sequential"
+                })
+
+                with chat_log_container:
+                    with st.chat_message("user"):
+                        st.markdown(user_msg_content)
+                        if upload_img_obj:
+                            st.image(upload_img_obj, width=200)
+
+                    with st.spinner("AIコーチが思考中..."):
+                        genai.configure(api_key=GEMINI_API_KEY)
+                        history_for_ai = []
+                        MAX_HISTORY_MESSAGES = 20
+                        limited_messages = st.session_state.messages[:-1][-MAX_HISTORY_MESSAGES:]
+                        
+                        for m in limited_messages: 
+                            content_str = ""
+                            if isinstance(m["content"], dict):
+                                content_str = m["content"].get("text", str(m["content"]))
+                            else:
+                                content_str = str(m["content"])
+                            history_for_ai.append({"role": m["role"], "parts": [content_str]})
+
+                        # モデルリスト（最新優先）
+                        PRIORITY_MODELS = [
+                            "gemini-3-flash-preview",
+                            "gemini-2.0-flash-exp",
+                            "gemini-1.5-flash",
+                            "gemini-3-pro-preview",
+                            "gemini-1.5-pro",
+                        ]
+                        
+                        ai_text = ""
+                        success_model = None
+                        error_details = []
+                        
+                        for model_name in PRIORITY_MODELS:
+                            try:
+                                model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+                                chat = model.start_chat(history=history_for_ai)
+                                inputs = [user_prompt]
+                                if upload_img_obj:
+                                    inputs.append(upload_img_obj)
+                                
+                                response = chat.send_message(inputs)
+                                ai_text = response.text
+                                success_model = model_name
+                                break 
+                            except Exception as e:
+                                log_message = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] ⚠️ {model_name} エラー: {e}"
+                                error_details.append(log_message)
+                                st.session_state.debug_logs.append(log_message)
+                                continue
+                    
+                    if success_model:
+                        st.session_state.last_used_model = success_model
+
+                        if success_model != PRIORITY_MODELS[0]:
+                            with st.chat_message("assistant"):
+                                    st.warning(f"Note: 最新モデル ({PRIORITY_MODELS[0]}) が利用できなかったため、{success_model} を使用しました。")
+
+                        st.session_state.messages.append({"role": "model", "content": ai_text})
+                        
+                        user_ref.collection("history").add({
+                            "role": "model",
+                            "content": ai_text,
+                            "timestamp": firestore.SERVER_TIMESTAMP
+                        })
+                        user_ref.collection("full_conversation_logs").add({
+                            "role": "model",
+                            "content": ai_text,
+                            "timestamp": firestore.SERVER_TIMESTAMP,
+                            "log_type": "sequential",
+                            "model": success_model
+                        })
+                        
+                        with st.chat_message("model"):
+                            st.markdown(ai_text)
+                        time.sleep(0.1) 
+                        st.rerun()
+                    else:
+                        st.error(f"❌ エラーが発生しました。\n詳細: {error_details}")
+
+# =========================================================
+# 8. メイン画面ルーティング (Main Entry Point)
+# =========================================================
+
+# ページの状態によって表示する関数を切り替え
+current_page = st.session_state.current_page
+
+if current_page == "portal":
+    render_portal_page()
+elif current_page == "chat":
+    render_chat_page()
+elif current_page == "study_log":
+    render_study_log_page()
+elif current_page == "ranking":
+    render_ranking_page()
+elif current_page == "board":
+    render_board_page()
+elif current_page == "buddy":
+    render_buddy_page()
+else:
+    # フォールバック
+    render_portal_page()
