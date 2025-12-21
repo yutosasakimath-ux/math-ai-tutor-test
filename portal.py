@@ -4,50 +4,54 @@ import time
 # --- ページ設定 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered")
 
-# --- CSSでボタンをカード風におしゃれにする ---
+# --- CSSでボタンを「大きなカード」に変身させる ---
 st.markdown("""
 <style>
-    .stButton button {
+    /* 全体のボタンのスタイルをリセット */
+    div.stButton > button {
         width: 100%;
-        border-radius: 10px;
-        height: 3em;
-        font-weight: bold;
-    }
-    .portal-card {
-        padding: 20px;
-        background-color: #f0f2f6;
         border-radius: 15px;
-        margin-bottom: 20px;
-        text-align: center;
+        border: none;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+        padding: 20px 10px; /* 上下左右の余白 */
     }
-    .portal-title {
-        font-size: 1.2em;
-        font-weight: bold;
-        margin-bottom: 10px;
-        color: #1f77b4;
+
+    /* ボタン内のテキスト設定 */
+    div.stButton > button p {
+        font-size: 1.1em;       /* 文字サイズ */
+        line-height: 1.5;       /* 行間 */
+        white-space: pre-wrap;  /* 改行(\n)を有効にする設定 */
     }
-    .portal-desc {
-        font-size: 0.9em;
-        color: #666;
-        margin-bottom: 15px;
+
+    /* マウスを乗せた時の動き */
+    div.stButton > button:hover {
+        transform: translateY(-3px); /* ぽよんと浮く */
+        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        background-color: #e3e8f0;   /* 少し濃い灰色に */
+        color: #1f77b4;              /* 青文字に変化 */
+    }
+    
+    /* 戻るボタンなどの小さなボタン用（必要なら調整） */
+    div[data-testid="column"] button {
+        height: auto;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- セッション状態の初期化 ---
 if "page" not in st.session_state:
-    st.session_state.page = "login"  # 初期ページはログイン
+    st.session_state.page = "login"
 if "user_name" not in st.session_state:
     st.session_state.user_name = None
 
-# --- 画面遷移のための関数 ---
+# --- 画面遷移関数 ---
 def navigate_to(page_name):
     st.session_state.page = page_name
     st.rerun()
 
 # =========================================================
-# 各画面（ページ）の定義
+# 各画面の定義
 # =========================================================
 
 def render_login():
@@ -61,7 +65,7 @@ def render_login():
         
         if submitted and name:
             st.session_state.user_name = name
-            st.session_state.page = "portal" # ポータルへ遷移
+            st.session_state.page = "portal"
             st.rerun()
 
 def render_portal():
@@ -69,123 +73,78 @@ def render_portal():
     st.title(f"こんにちは、{st.session_state.user_name}さん👋")
     st.caption("今日は何をしますか？")
 
-    # --- ダッシュボード的なサマリ表示 ---
-    # ここに「今週の学習時間」などをチラ見せするとモチベが上がります
+    # サマリ表示
     st.info("📊 今週の学習時間: **3時間20分** (目標まであと1時間！)")
-
     st.markdown("---")
 
-    # --- メニューボタン配置 (2列レイアウト) ---
+    # --- 大きなカード型ボタンの配置 ---
+    # ボタンの文字に「\n\n」を入れることで、タイトルと説明文を分けます
+    
     col1, col2 = st.columns(2)
-
     with col1:
-        # AIチャットへのリンクカード
-        st.markdown("""
-        <div class="portal-card">
-            <div class="portal-title">🤖 AIコーチ</div>
-            <div class="portal-desc">分からない問題を<br>質問しよう</div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("チャットを始める", key="btn_chat"):
+        # AIチャット
+        if st.button("🤖 AIコーチ\n\n分からない問題を\n質問しよう", use_container_width=True):
             navigate_to("chat")
 
     with col2:
-        # 学習記録へのリンクカード
-        st.markdown("""
-        <div class="portal-card">
-            <div class="portal-title">📝 学習記録</div>
-            <div class="portal-desc">今日の勉強時間を<br>記録しよう</div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("記録をつける", key="btn_record"):
+        # 学習記録
+        if st.button("📝 学習記録\n\n今日の勉強時間を\n記録しよう", use_container_width=True):
             navigate_to("record")
 
     col3, col4 = st.columns(2)
-
     with col3:
-        # ランキングへのリンクカード
-        st.markdown("""
-        <div class="portal-card">
-            <div class="portal-title">🏆 ランキング</div>
-            <div class="portal-desc">みんなの頑張りを<br>チェック！</div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("ランキングを見る", key="btn_rank"):
+        # ランキング
+        if st.button("🏆 ランキング\n\nみんなの頑張りを\nチェック！", use_container_width=True):
             navigate_to("ranking")
 
     with col4:
-        # バディ機能へのリンクカード
-        st.markdown("""
-        <div class="portal-card">
-            <div class="portal-title">🤝 バディ</div>
-            <div class="portal-desc">友達と一緒に<br>頑張ろう</div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("バディを探す", key="btn_buddy"):
+        # バディ機能
+        if st.button("🤝 バディ\n\n友達と一緒に\n頑張ろう", use_container_width=True):
             navigate_to("buddy")
 
     st.markdown("---")
-    if st.button("ログアウト", type="secondary"):
+    if st.button("ログアウト"):
         st.session_state.page = "login"
         st.session_state.user_name = None
         st.rerun()
 
+# --- その他の画面（中身はシンプルにしてあります） ---
+
 def render_chat():
-    """AIチャット画面"""
-    # 共通ヘッダー（戻るボタン）
     col_back, col_title = st.columns([1, 4])
     with col_back:
-        if st.button("🏠 戻る"):
-            navigate_to("portal")
+        if st.button("🏠 戻る"): navigate_to("portal")
     with col_title:
         st.subheader("🤖 AI数学コーチ")
-
-    st.markdown("ここにチャット機能が入ります...")
-    # (ここに以前のチャットコードを移植します)
-    st.chat_message("assistant").write("こんにちは！どの問題が分かりませんか？")
+    st.write("チャット画面です...")
+    # ここにチャット機能を実装
 
 def render_record():
-    """学習記録画面"""
     col_back, col_title = st.columns([1, 4])
     with col_back:
-        if st.button("🏠 戻る"):
-            navigate_to("portal")
+        if st.button("🏠 戻る"): navigate_to("portal")
     with col_title:
         st.subheader("📝 学習記録")
-    
-    with st.form("record_form"):
-        st.number_input("学習時間（分）", min_value=0, step=10)
-        st.text_area("一言メモ", placeholder="例: ベクトルの内積が少し分かった")
-        st.form_submit_button("記録する")
+    st.write("記録画面です...")
 
 def render_ranking():
-    """ランキング画面"""
     col_back, col_title = st.columns([1, 4])
     with col_back:
-        if st.button("🏠 戻る"):
-            navigate_to("portal")
+        if st.button("🏠 戻る"): navigate_to("portal")
     with col_title:
-        st.subheader("🏆 今週のランキング")
-    
-    st.write("1位: ユーザーA (10時間)")
-    st.write("2位: ユーザーB (8時間)")
-    st.write(f"3位: {st.session_state.user_name} (3時間20分)")
+        st.subheader("🏆 ランキング")
+    st.write("ランキング画面です...")
 
 def render_buddy():
-    """バディ画面"""
     col_back, col_title = st.columns([1, 4])
     with col_back:
-        if st.button("🏠 戻る"):
-            navigate_to("portal")
+        if st.button("🏠 戻る"): navigate_to("portal")
     with col_title:
         st.subheader("🤝 バディ機能")
-    
-    st.info("招待コード: **12345**")
-    st.text_input("友達のコードを入力")
-    st.button("連携する")
+    st.write("バディ画面です...")
 
 # =========================================================
-# メイン処理：現在のページ状態に応じて表示関数を切り替える
+# メイン処理
 # =========================================================
 
 if st.session_state.page == "login":
