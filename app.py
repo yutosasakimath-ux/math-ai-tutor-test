@@ -1256,7 +1256,9 @@ def render_board_page():
             st.markdown("---")
 
 def render_chat_page():
-apply_chat_css() # CSS適用
+    """AIコーチ画面（既存ロジック）"""
+    apply_chat_css() # CSS適用
+
     
     st.title("🤖 AI数学コーチ")
     st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
