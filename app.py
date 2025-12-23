@@ -78,13 +78,16 @@ def apply_chat_css():
         display: block;
         cursor: pointer;
     }
-    /* ファイル選択後のスタイル */
+    /* (1) 修正: ファイル選択後もカメラアイコンのままにするか、選択済みを示すアイコンにするか */
+    /* ここではユーザーが「送るボタン」を押すまでカメラのままでも違和感がないため、
+       または選択済みであることがわかるように色を変えるだけにします */
     [data-testid="stFileUploader"]:has(input[type="file"]:valid) section {
         background-color: #e0f7fa;
         border-color: #00bcd4;
     }
     [data-testid="stFileUploader"]:has(input[type="file"]:valid) section::after {
-        content: "✅"; /* 選択済み */
+        content: "📷"; /* チェックではなくカメラのまま維持（色は変わる） */
+        color: #00bcd4;
     }
     
     .stTextArea textarea {
@@ -367,7 +370,7 @@ with st.sidebar:
         if st.button("🏠 ホーム", use_container_width=True): navigate_to("admin_home")
         if st.button("📊 学習状況", use_container_width=True): navigate_to("admin_learning")
         
-        # (2) 管理者(global_admin)には連絡ボタンを表示しない
+        # 管理者には連絡ボタンを表示しない
         if user_role == "team_teacher":
             if st.button("📮 生徒連絡", use_container_width=True): navigate_to("admin_contact")
         
@@ -388,14 +391,11 @@ with st.sidebar:
 # =========================================================
 def get_unread_senders(target_team_id=None):
     try:
-        # 未読メッセージを検索 (Collection Group Query)
-        # ※インデックス作成が必要になる場合があります: sender ASC, read ASC
         query = db.collection_group("messages").where("sender", "==", "student").where("read", "==", False)
         docs = query.stream()
         
         unread_uids = set()
         for d in docs:
-            # メッセージの親ドキュメントのIDがユーザーID
             parent_doc = d.reference.parent.parent
             if parent_doc:
                 unread_uids.add(parent_doc.id)
@@ -410,7 +410,6 @@ def get_unread_senders(target_team_id=None):
         
         return list(unread_uids)
     except Exception as e:
-        # インデックス未作成エラーなどを想定
         print(f"Unread check error: {e}")
         return []
 
@@ -419,7 +418,7 @@ def get_unread_senders(target_team_id=None):
 # =========================================================
 
 def render_admin_home():
-    """管理者用ホーム"""
+    """管理者用ホーム - (3) UI整理"""
     role = st.session_state.user_role
     st.title("👨‍🏫 管理者ホーム")
     
@@ -430,7 +429,6 @@ def render_admin_home():
         t_name = st.session_state.get("managed_team_name", "担当チーム")
         st.info(f"チーム「{t_name}」の先生としてログイン中")
 
-        # (2) 未読チェック: 教員(team_teacher)のみ実行
         target_team = st.session_state.managed_team_id
         unread_uids = get_unread_senders(target_team)
         unread_count = len(unread_uids)
@@ -441,42 +439,45 @@ def render_admin_home():
             st.success("現在、未読のメッセージはありません。")
 
     st.markdown("### 📌 メニュー")
-    col1, col2 = st.columns(2)
     
-    with col1:
-        if st.button("📊 学習状況を確認する\n(チーム・生徒検索)", use_container_width=True):
-            navigate_to("admin_learning")
-        
-        if role == "global_admin":
-            if st.button("🔑 教員権限の管理\n(全体管理者のみ)", use_container_width=True):
-                navigate_to("admin_roles")
-            if st.button("👥 チーム作成\n(全体管理者のみ)", use_container_width=True):
+    # ボタン配置の整理（空白を詰める）
+    # 全体管理者: 学習状況, 教員権限, チーム作成, アカウント作成
+    # チーム先生: 学習状況, 生徒連絡
+    
+    if role == "global_admin":
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📊 学習状況を確認する", use_container_width=True):
+                navigate_to("admin_learning")
+            if st.button("👥 チーム作成", use_container_width=True):
                 navigate_to("admin_create_team")
-            
-    with col2:
-        # (2) 管理者には連絡ボタンを表示しない
-        if role == "team_teacher":
+        with col2:
+            if st.button("🔑 教員権限の管理", use_container_width=True):
+                navigate_to("admin_roles")
+            if st.button("👤 新規アカウント作成", use_container_width=True):
+                navigate_to("admin_signup")
+                
+    elif role == "team_teacher":
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📊 学習状況を確認する", use_container_width=True):
+                navigate_to("admin_learning")
+        with col2:
             btn_label = f"📮 生徒と連絡をとる"
             if unread_count > 0:
                 btn_label += f" (未読: {unread_count}件)"
             if st.button(btn_label, use_container_width=True):
                 navigate_to("admin_contact")
-        
-        if role == "global_admin":
-            if st.button("👤 新規アカウント作成\n(全体管理者のみ)", use_container_width=True):
-                navigate_to("admin_signup")
 
 def render_admin_learning():
-    """(1) 学習状況確認（検索機能拡張: タブ分け）"""
+    """学習状況確認"""
     st.title("📊 学習状況の確認")
     role = st.session_state.user_role
     
-    # 検索方法タブ
     tab_team, tab_student = st.tabs(["👥 チームコードで検索", "🧑‍🎓 生徒名で検索"])
     
     users_list = []
     
-    # --- タブ1: チームコード検索 ---
     with tab_team:
         if role == "team_teacher":
             st.info(f"担当チーム: {st.session_state.get('managed_team_name', '不明')}")
@@ -503,7 +504,6 @@ def render_admin_learning():
                 else:
                     st.warning("チームが見つかりません")
 
-    # --- タブ2: 生徒名検索 ---
     with tab_student:
         search_name = st.text_input("生徒名を入力", placeholder="例: 山田")
         if search_name:
@@ -547,11 +547,10 @@ def render_admin_learning():
             st.caption(f"登録日: {target.get('created_at')}")
 
 def render_admin_contact():
-    """(2) 連絡機能（未読/検索タブ分け） ※管理者はアクセス不可"""
+    """連絡機能"""
     st.title("📮 生徒との連絡")
     role = st.session_state.user_role
     
-    # 管理者ブロック
     if role == "global_admin":
         st.error("管理者権限では生徒のメッセージを閲覧できません。")
         if st.button("ホームに戻る"):
@@ -608,7 +607,6 @@ def render_admin_contact():
                             u_dat = u.to_dict()
                             if s_student_name in u_dat.get("name", ""):
                                 candidates.append(u_dat | {"id": u.id})
-            # 管理者の検索機能は削除済 (到達しないはずだが念のため)
 
         unique_candidates = {c['id']: c for c in candidates}.values()
         
@@ -635,7 +633,6 @@ def render_admin_contact():
         
         msgs_ref = db.collection("admin_messages").document(target_uid_for_chat).collection("messages")
         
-        # 既読処理
         unread_msgs = msgs_ref.where("sender", "==", "student").where("read", "==", False).stream()
         batch = db.batch()
         has_unread = False
@@ -678,7 +675,7 @@ def render_admin_contact():
                     st.rerun()
 
 def render_admin_create_team():
-    """(1) 管理者専用チーム作成機能（教員権限付与機能付き）"""
+    """チーム作成"""
     st.title("👥 チーム作成")
     st.caption("新しいクラス（チーム）を作成し、担当教員と初期メンバーを設定できます。")
     
@@ -689,12 +686,10 @@ def render_admin_create_team():
     with st.form("create_team_admin_form"):
         t_name = st.text_input("チーム名（例: 3年B組）")
         
-        # 全ユーザー取得（本来はもっと効率的な検索UIが必要）
         all_users_stream = db.collection("users").limit(100).stream()
         all_users = [u.to_dict() | {"id": u.id} for u in all_users_stream]
         user_opts = {u['id']: f"{u.get('name')} ({u.get('email')})" for u in all_users}
         
-        # 担当教員の選択
         st.markdown("### 👨‍🏫 担当教員の選択")
         st.caption("選択したアカウントに、このチームの教員権限(Teacher role)が付与されます。")
         selected_teacher_uid = st.selectbox(
@@ -703,7 +698,6 @@ def render_admin_create_team():
             format_func=lambda x: user_opts[x] if x else "選択してください"
         )
 
-        # メンバー選択
         st.markdown("### 🧑‍🎓 生徒の選択")
         selected_members = st.multiselect(
             "初期メンバーを選択（後からでも追加可能）", 
@@ -721,7 +715,6 @@ def render_admin_create_team():
             else:
                 t_code = str(uuid.uuid4())[:6].upper()
                 
-                # 教員もメンバーリストに含めるか？ -> 含めておくとリスト表示などで便利
                 final_members = list(set(selected_members + [selected_teacher_uid]))
 
                 new_ref = db.collection("teams").add({
@@ -734,13 +727,11 @@ def render_admin_create_team():
                 })
                 new_team_id = new_ref[1].id
                 
-                # 生徒の所属チーム更新
                 batch = db.batch()
                 for mid in final_members:
                     ref = db.collection("users").document(mid)
                     batch.update(ref, {"teamId": new_team_id})
                 
-                # 教員権限の付与 (role=teacher, managedTeamId=...)
                 teacher_ref = db.collection("users").document(selected_teacher_uid)
                 batch.update(teacher_ref, {
                     "role": "teacher",
@@ -751,7 +742,7 @@ def render_admin_create_team():
                 st.success(f"チーム「{t_name}」を作成しました！\n担当教員を設定しました。")
 
 def render_admin_roles():
-    """権限管理 (全体管理者のみ)"""
+    """権限管理"""
     st.title("🔑 教員権限の管理")
     if st.session_state.user_role != "global_admin":
         st.error("権限がありません")
@@ -826,7 +817,6 @@ def render_team_page():
     my_team_id = my_doc.get("teamId")
     
     if my_team_id:
-        # 所属済みの場合
         team_ref = db.collection("teams").document(my_team_id)
         team_doc = team_ref.get()
         if not team_doc.exists:
@@ -853,12 +843,13 @@ def render_team_page():
         
         st.markdown("---")
         if st.button("🚪 チームから脱退する"):
+            # (2) 修正: チームメンバーリストからの削除と同時に、ユーザーのteamIdも削除するが
+            # ランキングの重複を防ぐため、古いチームへの参照が残らないように確実に消す
             team_ref.update({"members": firestore.ArrayRemove([user_id])})
             user_ref.update({"teamId": firestore.DELETE_FIELD})
             st.success("脱退しました。")
             st.rerun()
     else:
-        # 未所属時: 参加または作成
         st.write("チームに参加して、みんなで学習時間を競い合おう！")
         tab_new, tab_join = st.tabs(["✨ 新規チーム作成", "📩 チームに参加"])
         
@@ -1147,15 +1138,39 @@ def render_ranking_page():
                  disp_name = get_anonymous_name(uid, student_name, False)
                  result.append({"name": disp_name + " (あなた)", "minutes": mins})
         return result
+    
+    # (2) ランキング重複対策: メンバー集計時に最新のusersドキュメントのteamIdと整合性を取る
     def make_team_list(stats):
         result = []
         for t in team_list:
-            members = t.get("members", [])
+            team_id = t["id"]
+            # チームドキュメントに記録されているメンバーIDリスト
+            members_in_team_doc = t.get("members", [])
+            
+            valid_members_count = 0
             team_total = 0
-            for m_uid in members: team_total += stats.get(m_uid, 0)
-            result.append({"name": t.get("name", "No Name"), "minutes": team_total, "count": len(members)})
+            
+            for m_uid in members_in_team_doc:
+                # ユーザーの最新情報を確認
+                if m_uid in user_map:
+                    user_info = user_map[m_uid]
+                    # ★重要: ユーザーの現在のteamIdが、このチームと一致しているか確認
+                    # 一致していない＝古い情報がチーム側に残っている＝集計対象外とする
+                    if user_info.get("teamId") == team_id:
+                        team_total += stats.get(m_uid, 0)
+                        valid_members_count += 1
+            
+            # 有効なメンバーがいる、または学習記録がある場合のみリストに追加
+            if team_total > 0 or valid_members_count > 0:
+                result.append({
+                    "name": t.get("name", "No Name"),
+                    "minutes": team_total,
+                    "count": valid_members_count
+                })
+        # 0分のチームを表示するかどうかは要件次第だが、ここでは0分を除外
         result = [r for r in result if r["minutes"] > 0]
         return result
+
     with tabs[0]:
         st.caption(f"集計期間: {datetime.datetime.now(JST).strftime('%Y/%m/%d')} (今日)")
         display_ranking_table(make_personal_list(stats_day))
