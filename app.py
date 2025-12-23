@@ -294,7 +294,8 @@ if st.session_state.user_info is None:
         st.error("⚠️ Web APIキーが設定されていません。Streamlit Secretsを確認してください。")
         st.stop()
 
-    tab_student, tab_admin = st.tabs(["🧑‍🎓 生徒ログイン", "👨‍🏫 先生・管理者ログイン"])
+    # ★修正: タブ名を変更し、先生ログインを排除
+    tab_student, tab_admin = st.tabs(["🧑‍🎓 生徒ログイン", "🛡️ 管理者ログイン"])
 
     with tab_student:
         st.caption("生徒のみなさんはこちらからログインしてください。")
@@ -315,16 +316,17 @@ if st.session_state.user_info is None:
                     st.rerun()
 
     with tab_admin:
-        st.caption("先生または管理者はこちら。")
+        # ★修正: 管理者専用の表記に変更
+        st.caption("システム管理者専用です。")
         with st.form("admin_login_form"):
             a_email = st.text_input("メールアドレス", key="a_email")
             a_password = st.text_input("パスワード", type="password", key="a_pass")
             
             st.markdown("---")
-            st.write("▼ 以下のいずれかを入力してください")
-            auth_code = st.text_input("管理者パスワード または チーム招待コード", type="password", help="開発者は管理者キー、先生は担当クラスのチームコードを入力してください。")
+            # ★修正: 教師用チームコードの入力を示唆する文言を削除
+            auth_code = st.text_input("管理者パスワード", type="password", help="管理者キーを入力してください。")
             
-            submit_admin = st.form_submit_button("管理者/先生としてログイン")
+            submit_admin = st.form_submit_button("管理者としてログイン")
             
             if submit_admin:
                 resp = sign_in_with_email(a_email, a_password)
@@ -336,6 +338,7 @@ if st.session_state.user_info is None:
                     
                     login_success = False
                     
+                    # ★修正: 教師ログイン(チームコード判定)を全削除し、管理者判定のみ残す
                     if ADMIN_KEY and auth_code == ADMIN_KEY:
                         if ADMIN_EMAIL and user_email_val == ADMIN_EMAIL:
                             st.session_state.user_info = {"uid": uid, "email": user_email_val}
@@ -343,33 +346,9 @@ if st.session_state.user_info is None:
                             login_success = True
                             st.success("全体管理者として認証しました")
                         else:
-                            st.error("⛔️ 認証に失敗しました。（管理者権限がありません）")
-                        
+                            st.error("⛔️ 認証に失敗しました。（管理者メールアドレスと一致しません）")
                     else:
-                        user_doc = db.collection("users").document(uid).get()
-                        is_teacher_auth = False
-                        managed_team_id = None
-                        
-                        if user_doc.exists:
-                            u_data = user_doc.to_dict()
-                            if u_data.get("role") == "teacher":
-                                managed_team_id = u_data.get("managedTeamId")
-                                if managed_team_id:
-                                    t_doc = db.collection("teams").document(managed_team_id).get()
-                                    if t_doc.exists:
-                                        t_data = t_doc.to_dict()
-                                        if t_data.get("teamCode") == auth_code.strip().upper():
-                                            is_teacher_auth = True
-                                            st.session_state.managed_team_name = t_data.get("name")
-                        
-                        if is_teacher_auth:
-                            st.session_state.user_info = {"uid": uid, "email": user_email_val}
-                            st.session_state.user_role = "team_teacher"
-                            st.session_state.managed_team_id = managed_team_id
-                            login_success = True
-                            st.success(f"チーム「{st.session_state.managed_team_name}」の先生として認証しました")
-                        else:
-                            st.error("⛔️ 先生としての権限がありません、またはチームコードが間違っています。")
+                        st.error("⛔️ 認証に失敗しました。（管理者パスワードが違います）")
                     
                     if login_success:
                         # 22日verには管理者専用画面がないため、通常のアプリ画面へ遷移させる
