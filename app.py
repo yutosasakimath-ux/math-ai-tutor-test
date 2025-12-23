@@ -556,89 +556,100 @@ def render_portal_page():
                 st.success("送信しました。ありがとうございます！")
         
         st.markdown("---")
-        st.markdown("### 🛡️ 管理者メニュー")
-        report_admin_pass = st.text_input("管理者パスワード", type="password", key="portal_admin_pass")
         
-        if ADMIN_KEY and report_admin_pass == ADMIN_KEY:
-            st.info("🔓 管理者モード")
-
-            st.markdown("#### 🤖 モデル稼働状況")
-            st.info(f"**最後に使用したモデル:** `{st.session_state.last_used_model}`")
+        # ★修正: 管理者メニューの表示制御を追加
+        # 一般生徒には管理者メニューを表示せず、誤ってアクセスできないようにする
+        is_admin = False
+        # ロールによる判定（前回追加した仕組み）または Emailによる判定
+        if st.session_state.get("user_role") == "global_admin":
+            is_admin = True
+        elif ADMIN_EMAIL and st.session_state.user_info.get("email") == ADMIN_EMAIL:
+            is_admin = True
             
-            # --- 利用可能なモデル一覧 ---
-            if st.button("📡 利用可能なモデル一覧を取得", key="admin_model_list"):
-                if not GEMINI_API_KEY:
-                    st.error("APIキーが設定されていません")
+        if is_admin:
+            st.markdown("### 🛡️ 管理者メニュー")
+            report_admin_pass = st.text_input("管理者パスワード", type="password", key="portal_admin_pass")
+            
+            if ADMIN_KEY and report_admin_pass == ADMIN_KEY:
+                st.info("🔓 管理者モード")
+
+                st.markdown("#### 🤖 モデル稼働状況")
+                st.info(f"**最後に使用したモデル:** `{st.session_state.last_used_model}`")
+                
+                # --- 利用可能なモデル一覧 ---
+                if st.button("📡 利用可能なモデル一覧を取得", key="admin_model_list"):
+                    if not GEMINI_API_KEY:
+                        st.error("APIキーが設定されていません")
+                    else:
+                        try:
+                            genai.configure(api_key=GEMINI_API_KEY)
+                            models = genai.list_models()
+                            available_models = []
+                            for m in models:
+                                if "generateContent" in m.supported_generation_methods:
+                                    available_models.append(m.name.replace("models/", ""))
+                            st.code("\n".join(available_models))
+                        except Exception as e:
+                            st.error(f"取得エラー: {e}")
+
+                # --- デバッグログ ---
+                st.markdown("#### 🛠 デバッグログ")
+                if st.session_state.debug_logs:
+                    for i, log in enumerate(reversed(st.session_state.debug_logs)):
+                        st.code(log, language="text")
+                    if st.button("ログ消去", key="admin_clear_log"):
+                        st.session_state.debug_logs = []
+                        st.rerun()
                 else:
-                    try:
-                        genai.configure(api_key=GEMINI_API_KEY)
-                        models = genai.list_models()
-                        available_models = []
-                        for m in models:
-                            if "generateContent" in m.supported_generation_methods:
-                                available_models.append(m.name.replace("models/", ""))
-                        st.code("\n".join(available_models))
-                    except Exception as e:
-                        st.error(f"取得エラー: {e}")
+                    st.caption("現在エラーログはありません")
+                
+                # --- コスト分析 ---
+                st.markdown("#### 💰 コスト分析")
+                if st.button("📊 ログからコストを試算", key="admin_cost_calc"):
+                    with st.spinner("集計中..."):
+                        try:
+                            INPUT_PRICE_PER_M = 0.50 
+                            OUTPUT_PRICE_PER_M = 3.00
+                            USD_JPY = 155.5
+                            SYSTEM_PROMPT_EST_LEN = 700 
+                            
+                            # 【修正】limitを追加して、全件取得によるコスト爆発を防止
+                            logs_ref = user_ref.collection("full_conversation_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1000)
+                            docs = logs_ref.stream()
+                            logs = [d.to_dict() for d in docs]
+                            
+                            if logs:
+                                total_input_chars = 0
+                                total_output_chars = 0
+                                history_buffer_len = 0
+                                # ログは降順で取得しているため、コスト計算用に逆順（古い順）にするのが正確だが、
+                                # 簡易計算としてそのまま処理
+                                for log in logs:
+                                    content = log.get("content", "")
+                                    content_len = len(content)
+                                    img_cost = 0
+                                    if "(※画像を送信しました)" in content:
+                                        img_cost = 300
+                                    if log.get("role") == "user":
+                                        current_input = SYSTEM_PROMPT_EST_LEN + history_buffer_len + content_len + img_cost
+                                        total_input_chars += current_input
+                                        history_buffer_len += content_len
+                                    elif log.get("role") == "model":
+                                        total_output_chars += content_len
+                                        history_buffer_len += content_len
+                                input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
+                                output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
+                                total_jpy = (input_cost_usd + output_cost_usd) * USD_JPY
+                                st.metric("推定総コスト (直近1000件分)", f"¥ {total_jpy:.2f}")
+                            else:
+                                st.warning("ログなし")
+                        except Exception as e:
+                            st.error(f"計算エラー: {e}")
 
-            # --- デバッグログ ---
-            st.markdown("#### 🛠 デバッグログ")
-            if st.session_state.debug_logs:
-                for i, log in enumerate(reversed(st.session_state.debug_logs)):
-                    st.code(log, language="text")
-                if st.button("ログ消去", key="admin_clear_log"):
-                    st.session_state.debug_logs = []
-                    st.rerun()
-            else:
-                st.caption("現在エラーログはありません")
-            
-            # --- コスト分析 ---
-            st.markdown("#### 💰 コスト分析")
-            if st.button("📊 ログからコストを試算", key="admin_cost_calc"):
-                with st.spinner("集計中..."):
-                    try:
-                        INPUT_PRICE_PER_M = 0.50 
-                        OUTPUT_PRICE_PER_M = 3.00
-                        USD_JPY = 155.5
-                        SYSTEM_PROMPT_EST_LEN = 700 
-                        
-                        # 【修正】limitを追加して、全件取得によるコスト爆発を防止
-                        logs_ref = user_ref.collection("full_conversation_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1000)
-                        docs = logs_ref.stream()
-                        logs = [d.to_dict() for d in docs]
-                        
-                        if logs:
-                            total_input_chars = 0
-                            total_output_chars = 0
-                            history_buffer_len = 0
-                            # ログは降順で取得しているため、コスト計算用に逆順（古い順）にするのが正確だが、
-                            # 簡易計算としてそのまま処理
-                            for log in logs:
-                                content = log.get("content", "")
-                                content_len = len(content)
-                                img_cost = 0
-                                if "(※画像を送信しました)" in content:
-                                    img_cost = 300
-                                if log.get("role") == "user":
-                                    current_input = SYSTEM_PROMPT_EST_LEN + history_buffer_len + content_len + img_cost
-                                    total_input_chars += current_input
-                                    history_buffer_len += content_len
-                                elif log.get("role") == "model":
-                                    total_output_chars += content_len
-                                    history_buffer_len += content_len
-                            input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
-                            output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
-                            total_jpy = (input_cost_usd + output_cost_usd) * USD_JPY
-                            st.metric("推定総コスト (直近1000件分)", f"¥ {total_jpy:.2f}")
-                        else:
-                            st.warning("ログなし")
-                    except Exception as e:
-                        st.error(f"計算エラー: {e}")
-
-            # --- レポート作成 ---
-            st.markdown("#### 📝 学習まとめレポート作成")
-            if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen"):
-                st.info("※チャット画面のデバッグメニューと同じロジックがここに実装されます（今回は省略）")
+                # --- レポート作成 ---
+                st.markdown("#### 📝 学習まとめレポート作成")
+                if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen"):
+                    st.info("※チャット画面のデバッグメニューと同じロジックがここに実装されます（今回は省略）")
 
 def render_study_log_page():
     """学習記録画面（修正・削除機能付き）"""
