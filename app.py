@@ -195,6 +195,12 @@ if "ADMIN_KEY" in st.secrets:
 else:
     ADMIN_KEY = None
 
+# 【追加】23日verのログインロジックで必要なため追加
+if "ADMIN_EMAIL" in st.secrets:
+    ADMIN_EMAIL = st.secrets["ADMIN_EMAIL"]
+else:
+    ADMIN_EMAIL = None 
+
 # 【修正】ハードコードされたデフォルトキーを削除
 if "FIREBASE_WEB_API_KEY" in st.secrets:
     FIREBASE_WEB_API_KEY = st.secrets["FIREBASE_WEB_API_KEY"]
@@ -250,6 +256,15 @@ def sign_up_with_email(email, password):
 # --- 3. セッション管理 ---
 if "user_info" not in st.session_state:
     st.session_state.user_info = None
+
+# 【追加】23日verのログインロジックとの互換性のため追加
+if "user_role" not in st.session_state:
+    st.session_state.user_role = "student" 
+if "managed_team_id" not in st.session_state:
+    st.session_state.managed_team_id = None 
+if "managed_team_name" not in st.session_state:
+    st.session_state.managed_team_name = None
+
 if "last_used_model" not in st.session_state:
     st.session_state.last_used_model = "まだ回答していません"
 if "last_report" not in st.session_state:
@@ -271,66 +286,97 @@ def navigate_to(page_name):
     st.session_state.current_page = page_name
     st.rerun()
 
-# --- 4. UI: ログイン画面 ---
+# --- 4. UI: ログイン画面 (23日verより移植・調整) ---
 if st.session_state.user_info is None:
     st.title("🎓 AI数学コーチ：ログイン")
     
     if not FIREBASE_WEB_API_KEY:
         st.error("⚠️ Web APIキーが設定されていません。Streamlit Secretsを確認してください。")
-    
-    with st.form("login_form"):
-        email = st.text_input("メールアドレス")
-        password = st.text_input("パスワード", type="password")
-        submit = st.form_submit_button("ログイン")
-        
-        if submit:
-            if not FIREBASE_WEB_API_KEY:
-                st.error("APIキー設定エラー")
-            else:
+        st.stop()
+
+    tab_student, tab_admin = st.tabs(["🧑‍🎓 生徒ログイン", "👨‍🏫 先生・管理者ログイン"])
+
+    with tab_student:
+        st.caption("生徒のみなさんはこちらからログインしてください。")
+        with st.form("student_login_form"):
+            email = st.text_input("メールアドレス", key="s_email")
+            password = st.text_input("パスワード", type="password", key="s_pass")
+            submit = st.form_submit_button("ログイン")
+            
+            if submit:
                 resp = sign_in_with_email(email, password)
                 if "error" in resp:
                     st.error(f"ログイン失敗: {resp['error']['message']}")
                 else:
                     st.session_state.user_info = {"uid": resp["localId"], "email": resp["email"]}
-                    if "user_name" in st.session_state:
-                        del st.session_state["user_name"]
+                    st.session_state.user_role = "student"
                     st.success("ログインしました！")
+                    time.sleep(0.5)
                     st.rerun()
 
-    st.markdown("---")
-    
-    with st.expander("管理者用：新規アカウント作成"):
-        admin_pass_input = st.text_input("管理者パスワード", type="password", key="admin_reg_pass")
-        if ADMIN_KEY and admin_pass_input == ADMIN_KEY:
-            st.info("🔓 管理者モード：新規モニターユーザーを作成します")
-            with st.form("admin_signup_form"):
-                new_name_input = st.text_input("生徒のお名前") 
-                new_email = st.text_input("新規メールアドレス")
-                new_password = st.text_input("新規パスワード")
-                submit_new = st.form_submit_button("アカウントを作成する")
-                
-                if submit_new:
-                    if not new_name_input:
-                        st.error("お名前を入力してください")
-                    else:
-                        resp = sign_up_with_email(new_email, new_password)
-                        if "error" in resp:
-                            st.error(f"作成失敗: {resp['error']['message']}")
+    with tab_admin:
+        st.caption("先生または管理者はこちら。")
+        with st.form("admin_login_form"):
+            a_email = st.text_input("メールアドレス", key="a_email")
+            a_password = st.text_input("パスワード", type="password", key="a_pass")
+            
+            st.markdown("---")
+            st.write("▼ 以下のいずれかを入力してください")
+            auth_code = st.text_input("管理者パスワード または チーム招待コード", type="password", help="開発者は管理者キー、先生は担当クラスのチームコードを入力してください。")
+            
+            submit_admin = st.form_submit_button("管理者/先生としてログイン")
+            
+            if submit_admin:
+                resp = sign_in_with_email(a_email, a_password)
+                if "error" in resp:
+                    st.error(f"認証失敗: {resp['error']['message']}")
+                else:
+                    uid = resp["localId"]
+                    user_email_val = resp["email"]
+                    
+                    login_success = False
+                    
+                    if ADMIN_KEY and auth_code == ADMIN_KEY:
+                        if ADMIN_EMAIL and user_email_val == ADMIN_EMAIL:
+                            st.session_state.user_info = {"uid": uid, "email": user_email_val}
+                            st.session_state.user_role = "global_admin"
+                            login_success = True
+                            st.success("全体管理者として認証しました")
                         else:
-                            new_uid = resp["localId"]
-                            try:
-                                db.collection("users").document(new_uid).set({
-                                    "name": new_name_input,
-                                    "email": new_email,
-                                    "created_at": firestore.SERVER_TIMESTAMP,
-                                    "totalStudyMinutes": 0,
-                                    "isAnonymousRanking": False
-                                })
-                                st.success(f"アカウント作成成功！\n名前: {new_name_input}\nEmail: {new_email}\nPass: {new_password}")
-                            except Exception as e:
-                                st.error(f"データベース登録エラー: {e}")
-        elif admin_pass_input:
-            st.error("パスワードが違います")
+                            st.error("⛔️ 認証に失敗しました。（管理者権限がありません）")
+                        
+                    else:
+                        user_doc = db.collection("users").document(uid).get()
+                        is_teacher_auth = False
+                        managed_team_id = None
+                        
+                        if user_doc.exists:
+                            u_data = user_doc.to_dict()
+                            if u_data.get("role") == "teacher":
+                                managed_team_id = u_data.get("managedTeamId")
+                                if managed_team_id:
+                                    t_doc = db.collection("teams").document(managed_team_id).get()
+                                    if t_doc.exists:
+                                        t_data = t_doc.to_dict()
+                                        if t_data.get("teamCode") == auth_code.strip().upper():
+                                            is_teacher_auth = True
+                                            st.session_state.managed_team_name = t_data.get("name")
+                        
+                        if is_teacher_auth:
+                            st.session_state.user_info = {"uid": uid, "email": user_email_val}
+                            st.session_state.user_role = "team_teacher"
+                            st.session_state.managed_team_id = managed_team_id
+                            login_success = True
+                            st.success(f"チーム「{st.session_state.managed_team_name}」の先生として認証しました")
+                        else:
+                            st.error("⛔️ 先生としての権限がありません、またはチームコードが間違っています。")
+                    
+                    if login_success:
+                        # 22日verには管理者専用画面がないため、通常のアプリ画面へ遷移させる
+                        st.info("※22日verの画面へ移動します")
+                        time.sleep(0.5)
+                        st.rerun()
+
     st.stop()
 
 # =========================================================
