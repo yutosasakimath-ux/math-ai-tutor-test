@@ -10,9 +10,9 @@ from PIL import Image
 import os
 import io
 import base64
-import re  # 正規表現用
-import uuid # UUID生成用
-import pandas as pd # ランキング表示の整形用
+import re
+import uuid
+import pandas as pd
 
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -22,11 +22,9 @@ from reportlab.lib.units import mm
 
 # --- 0. 設定と定数 ---
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
-
-# JST（日本時間）の定義
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
-# --- CSS定義 ---
+# --- CSS定義 (省略なしで維持) ---
 def apply_chat_css():
     hide_streamlit_style = """
     <style>
@@ -102,7 +100,7 @@ def apply_portal_css():
     """
     st.markdown(portal_style, unsafe_allow_html=True)
 
-# --- フォント管理 ---
+# --- フォント管理 (省略なし) ---
 FONT_URL = "https://moji.or.jp/wp-content/ipafont/IPAexfont/ipaexg00401.zip"
 FONT_FILE_NAME = "ipaexg.ttf"
 
@@ -162,6 +160,13 @@ def create_pdf(text_content, student_name):
     return buffer
 
 # --- Secrets ---
+# ★追加: 管理者のメールアドレスチェック用
+# secrets.toml に ADMIN_EMAIL = "your-email@example.com" を追加推奨
+if "ADMIN_EMAIL" in st.secrets:
+    ADMIN_EMAIL = st.secrets["ADMIN_EMAIL"]
+else:
+    ADMIN_EMAIL = None # 設定がない場合はメールチェックをスキップまたは警告
+
 if "ADMIN_KEY" in st.secrets:
     ADMIN_KEY = st.secrets["ADMIN_KEY"]
 else:
@@ -219,17 +224,10 @@ def sign_up_with_email(email, password):
 # --- 3. セッション管理 ---
 if "user_info" not in st.session_state:
     st.session_state.user_info = None
-
-# ★追加: ユーザーの役割管理
-# "student": 生徒
-# "global_admin": 全体管理者（開発者）
-# "team_teacher": チーム管理者（先生）
 if "user_role" not in st.session_state:
     st.session_state.user_role = "student" 
-
 if "managed_team_id" not in st.session_state:
-    st.session_state.managed_team_id = None # 先生が管理するチームID
-
+    st.session_state.managed_team_id = None 
 if "last_used_model" not in st.session_state:
     st.session_state.last_used_model = "まだ回答していません"
 if "last_report" not in st.session_state:
@@ -247,7 +245,7 @@ def navigate_to(page_name):
     st.session_state.current_page = page_name
     st.rerun()
 
-# --- 4. UI: ログイン画面 (タブで分岐) ---
+# --- 4. UI: ログイン画面 ---
 if st.session_state.user_info is None:
     st.title("🎓 AI数学コーチ：ログイン")
     
@@ -255,7 +253,6 @@ if st.session_state.user_info is None:
         st.error("⚠️ Web APIキーが設定されていません。Streamlit Secretsを確認してください。")
         st.stop()
 
-    # ★変更点: タブでログイン方法を分岐
     tab_student, tab_admin = st.tabs(["🧑‍🎓 生徒ログイン", "👨‍🏫 先生・管理者ログイン"])
 
     # --- タブ1: 生徒用ログイン ---
@@ -272,14 +269,16 @@ if st.session_state.user_info is None:
                     st.error(f"ログイン失敗: {resp['error']['message']}")
                 else:
                     st.session_state.user_info = {"uid": resp["localId"], "email": resp["email"]}
-                    st.session_state.user_role = "student" # 役割を生徒に設定
+                    st.session_state.user_role = "student"
                     st.success("ログインしました！")
                     time.sleep(0.5)
                     st.rerun()
 
-    # --- タブ2: 先生・管理者用ログイン ---
+    # --- タブ2: 先生・管理者用ログイン (セキュリティ強化版) ---
     with tab_admin:
-        st.caption("先生または管理者はこちら。別途認証コードが必要です。")
+        st.caption("先生または管理者はこちら。")
+        st.warning("※管理者権限を持つアカウントでのみログイン可能です。")
+        
         with st.form("admin_login_form"):
             a_email = st.text_input("メールアドレス", key="a_email")
             a_password = st.text_input("パスワード", type="password", key="a_pass")
@@ -299,39 +298,53 @@ if st.session_state.user_info is None:
                     uid = resp["localId"]
                     user_email_val = resp["email"]
                     
-                    # 2. 権限チェック
+                    # 2. 権限チェック (セキュリティ強化)
+                    
                     # A. 全体管理者（開発者）チェック
+                    # メールアドレスが一致することを確認 (SecretsにADMIN_EMAILが設定されている場合)
                     if ADMIN_KEY and auth_code == ADMIN_KEY:
-                        st.session_state.user_info = {"uid": uid, "email": user_email_val}
-                        st.session_state.user_role = "global_admin"
-                        st.success("全体管理者としてログインしました")
-                        time.sleep(0.5)
-                        st.rerun()
+                        if ADMIN_EMAIL and user_email_val != ADMIN_EMAIL:
+                            st.error("⛔️ このアカウントは管理者権限を持っていません。(Email不一致)")
+                        else:
+                            st.session_state.user_info = {"uid": uid, "email": user_email_val}
+                            st.session_state.user_role = "global_admin"
+                            st.success("全体管理者としてログインしました")
+                            time.sleep(0.5)
+                            st.rerun()
                         
                     # B. チーム管理者（先生）チェック
                     else:
-                        # チームコードが一致するチームを探す
                         team_query = db.collection("teams").where("teamCode", "==", auth_code.strip().upper()).stream()
                         target_team = next(team_query, None)
                         
                         if target_team:
-                            st.session_state.user_info = {"uid": uid, "email": user_email_val}
-                            st.session_state.user_role = "team_teacher"
-                            st.session_state.managed_team_id = target_team.id
-                            st.session_state.managed_team_name = target_team.to_dict().get("name")
+                            team_data = target_team.to_dict()
+                            owner_id = team_data.get("ownerId")
                             
-                            st.success(f"チーム「{st.session_state.managed_team_name}」の先生としてログインしました")
-                            time.sleep(0.5)
-                            st.rerun()
+                            # ★重要: チームの所有者IDとログインユーザーIDが一致するか確認
+                            # (ownerIdがない古いチームデータの場合は、セキュリティのため拒否するか、
+                            #  または既存の挙動を維持するか要検討。ここでは拒否する安全側の実装)
+                            if owner_id and owner_id == uid:
+                                st.session_state.user_info = {"uid": uid, "email": user_email_val}
+                                st.session_state.user_role = "team_teacher"
+                                st.session_state.managed_team_id = target_team.id
+                                st.session_state.managed_team_name = team_data.get("name")
+                                st.success(f"チーム「{st.session_state.managed_team_name}」の先生としてログインしました")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error("⛔️ あなたはこのチームの管理者ではありません。")
                         else:
-                            st.error("認証コード（管理者キーまたはチームコード）が正しくありません。")
+                            st.error("認証コードが無効です。")
 
     st.markdown("---")
     
+    # 新規アカウント作成（管理者による）
     with st.expander("管理者用：新規アカウント作成"):
         admin_pass_input = st.text_input("管理者パスワード", type="password", key="admin_reg_pass")
+        # ここでも簡易チェック
         if ADMIN_KEY and admin_pass_input == ADMIN_KEY:
-            st.info("🔓 管理者モード：新規ユーザーを作成します")
+            st.info("🔓 管理者モード")
             with st.form("admin_signup_form"):
                 new_name_input = st.text_input("お名前") 
                 new_email = st.text_input("新規メールアドレス")
@@ -368,7 +381,7 @@ if st.session_state.user_info is None:
 
 user_id = st.session_state.user_info["uid"]
 user_email = st.session_state.user_info["email"]
-user_role = st.session_state.user_role # 現在のロール
+user_role = st.session_state.user_role 
 
 user_ref = db.collection("users").document(user_id)
 if "user_name" not in st.session_state:
@@ -406,7 +419,6 @@ with st.sidebar:
         if st.button("💬 掲示板", use_container_width=True):
                 navigate_to("board")
         
-        # ★追加: 先生への連絡
         if st.button("📮 先生へ連絡", use_container_width=True):
             navigate_to("contact")
         
@@ -448,7 +460,6 @@ with st.sidebar:
             st.markdown("---")
 
     else:
-        # 管理者・先生用サイドバー
         st.header("管理者メニュー")
         role_label = "開発者" if user_role == "global_admin" else "先生"
         st.caption(f"権限: {role_label}")
@@ -464,7 +475,6 @@ with st.sidebar:
 # 各画面の描画関数定義
 # =========================================================
 
-# ★追加: 先生への連絡ページ（生徒用）
 def render_contact_page():
     st.title("📮 先生へ連絡")
     st.caption("学習の相談や連絡事項があれば、ここにメッセージを書いてください。")
@@ -512,7 +522,6 @@ def render_contact_page():
             except Exception as e:
                 st.error(f"送信エラー: {e}")
 
-# ★追加: 管理者ダッシュボード（先生/管理者用）
 def render_admin_dashboard():
     role = st.session_state.user_role
     
@@ -531,7 +540,6 @@ def render_admin_dashboard():
     
     users_list = []
     
-    # データ取得
     if role == "global_admin":
         users_stream = db.collection("users").order_by("totalStudyMinutes", direction=firestore.Query.DESCENDING).limit(100).stream()
         users_list = [u.to_dict() | {"id": u.id} for u in users_stream]
@@ -622,7 +630,6 @@ def render_admin_dashboard():
                     time.sleep(0.5)
                     st.rerun()
 
-    # 開発者専用メニュー
     if role == "global_admin":
         st.markdown("---")
         with st.expander("🛠 開発者ツール"):
@@ -653,9 +660,7 @@ def render_admin_dashboard():
             else:
                 st.caption("現在エラーログはありません")
 
-
 def render_portal_page():
-    """ポータル画面（ホーム）"""
     apply_portal_css()
     st.title(f"こんにちは、{student_name}さん！👋")
     
@@ -1083,10 +1088,12 @@ def render_team_page():
                 submit_create = st.form_submit_button("作成して参加")
                 if submit_create and t_name:
                     t_code = str(uuid.uuid4())[:6].upper()
+                    # ★重要: 作成者のIDを ownerId として記録する
                     new_team_ref = db.collection("teams").add({
                         "name": t_name,
                         "teamCode": t_code,
                         "members": [user_id],
+                        "ownerId": user_id, # チーム管理者ID
                         "createdAt": firestore.SERVER_TIMESTAMP
                     })
                     new_team_id = new_team_ref[1].id
@@ -1294,7 +1301,7 @@ if user_role == "student":
         render_board_page()
     elif current_page == "team":
         render_team_page()
-    elif current_page == "contact": # 追加
+    elif current_page == "contact":
         render_contact_page()
     else:
         render_portal_page()
