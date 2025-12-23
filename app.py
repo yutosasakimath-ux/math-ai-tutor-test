@@ -880,17 +880,20 @@ def render_ranking_page():
     def make_team_list(stats):
         result = []
         for t in team_list:
-            members = t.get("members", [])
+            team_id = t["id"]
+            members_in_team_doc = t.get("members", [])
+            valid_members_count = 0
             team_total = 0
-            # チームメンバーの当該期間の学習時間を合計
-            for m_uid in members:
-                team_total += stats.get(m_uid, 0)
+            for m_uid in members_in_team_doc:
+                if m_uid in user_map:
+                    user_info = user_map[m_uid]
+                    # ★修正: ユーザー情報の所属チームIDと、現在のチームIDが一致するか確認
+                    if user_info.get("teamId") == team_id:
+                        team_total += stats.get(m_uid, 0)
+                        valid_members_count += 1
             
-            result.append({
-                "name": t.get("name", "No Name"),
-                "minutes": team_total,
-                "count": len(members)
-            })
+            if team_total > 0 or valid_members_count > 0:
+                result.append({"name": t.get("name", "No Name"), "minutes": team_total, "count": valid_members_count})
         result = [r for r in result if r["minutes"] > 0]
         return result
 
