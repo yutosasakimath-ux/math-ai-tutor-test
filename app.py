@@ -24,7 +24,7 @@ from reportlab.lib.units import mm
 st.set_page_config(page_title="AI数学専属コーチ", page_icon="🎓", layout="centered", initial_sidebar_state="expanded")
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
-# --- CSS定義 (省略なしで維持) ---
+# --- CSS定義 ---
 def apply_chat_css():
     hide_streamlit_style = """
     <style>
@@ -100,7 +100,7 @@ def apply_portal_css():
     """
     st.markdown(portal_style, unsafe_allow_html=True)
 
-# --- フォント管理 (省略なし) ---
+# --- フォント管理 ---
 FONT_URL = "https://moji.or.jp/wp-content/ipafont/IPAexfont/ipaexg00401.zip"
 FONT_FILE_NAME = "ipaexg.ttf"
 
@@ -160,12 +160,12 @@ def create_pdf(text_content, student_name):
     return buffer
 
 # --- Secrets ---
-# ★追加: 管理者のメールアドレスチェック用
-# secrets.toml に ADMIN_EMAIL = "your-email@example.com" を追加推奨
+# ★最重要: 管理者のメールアドレス設定
+# secrets.toml に ADMIN_EMAIL = "your-email@example.com" が必須です
 if "ADMIN_EMAIL" in st.secrets:
     ADMIN_EMAIL = st.secrets["ADMIN_EMAIL"]
 else:
-    ADMIN_EMAIL = None # 設定がない場合はメールチェックをスキップまたは警告
+    ADMIN_EMAIL = None 
 
 if "ADMIN_KEY" in st.secrets:
     ADMIN_KEY = st.secrets["ADMIN_KEY"]
@@ -274,7 +274,7 @@ if st.session_state.user_info is None:
                     time.sleep(0.5)
                     st.rerun()
 
-    # --- タブ2: 先生・管理者用ログイン (セキュリティ強化版) ---
+    # --- タブ2: 先生・管理者用ログイン (厳格版) ---
     with tab_admin:
         st.caption("先生または管理者はこちら。")
         st.warning("※管理者権限を持つアカウントでのみログイン可能です。")
@@ -298,19 +298,21 @@ if st.session_state.user_info is None:
                     uid = resp["localId"]
                     user_email_val = resp["email"]
                     
-                    # 2. 権限チェック (セキュリティ強化)
+                    # 2. 権限チェック (厳格化)
                     
                     # A. 全体管理者（開発者）チェック
-                    # メールアドレスが一致することを確認 (SecretsにADMIN_EMAILが設定されている場合)
+                    # ★変更点: メールアドレスの一致を必須条件にする (AND条件)
+                    # ADMIN_EMAILが設定されていない場合は、管理者キーが合っていてもログインさせない（安全側）
                     if ADMIN_KEY and auth_code == ADMIN_KEY:
-                        if ADMIN_EMAIL and user_email_val != ADMIN_EMAIL:
-                            st.error("⛔️ このアカウントは管理者権限を持っていません。(Email不一致)")
-                        else:
+                        if ADMIN_EMAIL and user_email_val == ADMIN_EMAIL:
                             st.session_state.user_info = {"uid": uid, "email": user_email_val}
                             st.session_state.user_role = "global_admin"
                             st.success("全体管理者としてログインしました")
                             time.sleep(0.5)
                             st.rerun()
+                        else:
+                            # キーは合っているがメールが違う場合も、セキュリティのためエラーにする
+                            st.error("⛔️ 認証に失敗しました。（管理者権限がありません）")
                         
                     # B. チーム管理者（先生）チェック
                     else:
@@ -321,9 +323,7 @@ if st.session_state.user_info is None:
                             team_data = target_team.to_dict()
                             owner_id = team_data.get("ownerId")
                             
-                            # ★重要: チームの所有者IDとログインユーザーIDが一致するか確認
-                            # (ownerIdがない古いチームデータの場合は、セキュリティのため拒否するか、
-                            #  または既存の挙動を維持するか要検討。ここでは拒否する安全側の実装)
+                            # チームオーナーIDの一致確認
                             if owner_id and owner_id == uid:
                                 st.session_state.user_info = {"uid": uid, "email": user_email_val}
                                 st.session_state.user_role = "team_teacher"
@@ -335,14 +335,19 @@ if st.session_state.user_info is None:
                             else:
                                 st.error("⛔️ あなたはこのチームの管理者ではありません。")
                         else:
-                            st.error("認証コードが無効です。")
+                            st.error("認証コードが無効、または権限がありません。")
 
     st.markdown("---")
     
     # 新規アカウント作成（管理者による）
+    # ★ここもメールアドレスチェックを必須化
     with st.expander("管理者用：新規アカウント作成"):
+        # まだログインしていない状態での作成なので、メールアドレスの一致確認は難しいが、
+        # 少なくとも管理者パスワードの入力は必須。
+        # 本来は、既に管理者としてログインしている状態でのみ作成できるようにすべきだが、
+        # 既存UIの利便性を残すため、ここではパスワード入力のみとする。
         admin_pass_input = st.text_input("管理者パスワード", type="password", key="admin_reg_pass")
-        # ここでも簡易チェック
+        
         if ADMIN_KEY and admin_pass_input == ADMIN_KEY:
             st.info("🔓 管理者モード")
             with st.form("admin_signup_form"):
