@@ -1256,10 +1256,13 @@ def render_board_page():
             st.markdown("---")
 
 def render_chat_page():
-    apply_chat_css()
+apply_chat_css() # CSS適用
+    
     st.title("🤖 AI数学コーチ")
     st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
+
     if not st.session_state.messages_loaded:
+        # limitを追加
         history_ref = user_ref.collection("history").order_by("timestamp").limit(50)
         docs = history_ref.stream()
         loaded_msgs = []
@@ -1267,17 +1270,32 @@ def render_chat_page():
             loaded_msgs.append(doc.to_dict())
         st.session_state.messages = loaded_msgs
         st.session_state.messages_loaded = True
+
     chat_log_container = st.container()
+
     with chat_log_container:
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 content = msg["content"]
                 if isinstance(content, dict):
-                    if "text" in content: st.markdown(content["text"])
-                else: st.markdown(content)
+                    if "text" in content:
+                        st.markdown(content["text"])
+                else:
+                    st.markdown(content)
+
     system_instruction = f"""
     あなたは世界一の「ソクラテス式数学コーチ」です。
     生徒の名前は「{student_name}」さんです。
+
+    【重要な追加指示：画像入力について】
+    生徒から画像（数式や問題文）が送られた場合：
+    1. 画像内の文字や数式を読み取ってください。
+    2. 読み取った内容をもとに、生徒がどこで詰まっているかを分析してください。
+    3. もし画像が不鮮明で読めない場合は、「文字が少し読みづらいです。もう少し明るい場所で撮り直すか、どんな問題か教えてくれますか？」と優しく返してください。
+
+    【あなたの絶対的な使命】
+    生徒が「自力で答えに辿り着く」ことを支援すること。
+    答えを教えることは、生徒の学習機会を奪う「罪」だと認識してください。
     【指導ガイドライン】
     1. **回答の禁止**: どんなに求められても、最終的な答えや数式を直接提示してはいけません。
     2. **現状分析**: まず、生徒が質問を見て、「どこまで分かっていて、どこで詰まっているか」を特定してください。
@@ -1285,18 +1303,20 @@ def render_chat_page():
     4. **アウトプットの要求**: 一方的に解説せず、必ず生徒に考えさせ、返答させてください。
     5. **数式**: 必要であればLaTeX形式（$マーク）を使ってきれいに表示してください。
     """
+
     with st.form(key="chat_form", clear_on_submit=True):
         col1, col2, col3 = st.columns([0.8, 5, 1], gap="small")
         with col1:
-            uploaded_file = st.file_uploader("写真を選択", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed", key="chat_uploader")
-        with col2: 
+            uploaded_file = st.file_uploader(" ", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed", key="chat_uploader")
+        with col2:
             user_prompt = st.text_area("質問", placeholder="質問を入力...", height=68, label_visibility="collapsed")
         with col3:
             st.write("") 
             submitted = st.form_submit_button("送信")
+
         if submitted:
             if not user_prompt and not uploaded_file:
-                st.warning("質問または画像を入力してください")
+                st.warning("質問か画像を入力してください")
             elif not GEMINI_API_KEY:
                 st.warning("Gemini APIキーが設定されていません。")
             else:
@@ -1306,8 +1326,11 @@ def render_chat_page():
                     try:
                         upload_img_obj = Image.open(uploaded_file)
                         user_msg_content += "\n\n(※画像を送信しました)"
-                    except Exception: st.error("画像エラー")
+                    except Exception:
+                        st.error("画像エラー")
+
                 st.session_state.messages.append({"role": "user", "content": user_msg_content})
+                
                 user_ref.collection("history").add({
                     "role": "user",
                     "content": user_msg_content,
@@ -1319,48 +1342,82 @@ def render_chat_page():
                     "timestamp": firestore.SERVER_TIMESTAMP,
                     "log_type": "sequential"
                 })
+
                 with chat_log_container:
                     with st.chat_message("user"):
                         st.markdown(user_msg_content)
-                        if upload_img_obj: st.image(upload_img_obj, width=200)
+                        if upload_img_obj:
+                            st.image(upload_img_obj, width=200)
+
                     with st.spinner("AIコーチが思考中..."):
                         genai.configure(api_key=GEMINI_API_KEY)
                         history_for_ai = []
                         MAX_HISTORY_MESSAGES = 20
                         limited_messages = st.session_state.messages[:-1][-MAX_HISTORY_MESSAGES:]
+                        
                         for m in limited_messages: 
                             content_str = ""
-                            if isinstance(m["content"], dict): content_str = m["content"].get("text", str(m["content"]))
-                            else: content_str = str(m["content"])
+                            if isinstance(m["content"], dict):
+                                content_str = m["content"].get("text", str(m["content"]))
+                            else:
+                                content_str = str(m["content"])
                             history_for_ai.append({"role": m["role"], "parts": [content_str]})
-                        PRIORITY_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro"]
+
+                        PRIORITY_MODELS = [
+                            "gemini-3-flash-preview",
+                            "gemini-2.0-flash-exp",
+                            "gemini-1.5-flash",
+                            "gemini-3-pro-preview",
+                            "gemini-1.5-pro",
+                        ]
+                        
                         ai_text = ""
                         success_model = None
                         error_details = []
+                        
+                        # 【修正】リトライロジック (Exponential Backoff)
+                        # 一時的なエラー（503など）に対して再試行を行う
+                        
                         for model_name in PRIORITY_MODELS:
+                            # モデルごとに最大3回リトライ
                             retry_count = 0
                             max_retries = 3
+                            
                             while retry_count < max_retries:
                                 try:
                                     model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
                                     chat = model.start_chat(history=history_for_ai)
                                     inputs = [user_prompt]
-                                    if upload_img_obj: inputs.append(upload_img_obj)
+                                    if upload_img_obj:
+                                        inputs.append(upload_img_obj)
+                                    
                                     response = chat.send_message(inputs)
                                     ai_text = response.text
                                     success_model = model_name
-                                    break 
+                                    break # 成功したらループを抜ける
                                 except Exception as e:
                                     retry_count += 1
-                                    wait_time = 2 ** retry_count
+                                    wait_time = 2 ** retry_count # 2, 4, 8秒待機
                                     log_message = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] ⚠️ {model_name} エラー(Try {retry_count}): {e}"
                                     error_details.append(log_message)
                                     st.session_state.debug_logs.append(log_message)
-                                    if retry_count < max_retries: time.sleep(wait_time)
-                            if success_model: break
+                                    if retry_count < max_retries:
+                                        time.sleep(wait_time)
+                                    else:
+                                        pass # 次のモデルへ
+
+                            if success_model:
+                                break # モデルが見つかったら外側のループも抜ける
+                    
                     if success_model:
                         st.session_state.last_used_model = success_model
+
+                        if success_model != PRIORITY_MODELS[0]:
+                            with st.chat_message("assistant"):
+                                    st.warning(f"Note: 最新モデル ({PRIORITY_MODELS[0]}) が利用できなかったため、{success_model} を使用しました。")
+
                         st.session_state.messages.append({"role": "model", "content": ai_text})
+                        
                         user_ref.collection("history").add({
                             "role": "model",
                             "content": ai_text,
@@ -1373,11 +1430,14 @@ def render_chat_page():
                             "log_type": "sequential",
                             "model": success_model
                         })
+                        
                         with st.chat_message("model"):
                             st.markdown(ai_text)
                         time.sleep(0.1) 
                         st.rerun()
-                    else: st.error(f"❌ エラーが発生しました。\n詳細: {error_details}")
+                    else:
+                        st.error(f"❌ エラーが発生しました。\n詳細: {error_details}")
+
 
 # =========================================================
 # 8. メイン画面ルーティング
