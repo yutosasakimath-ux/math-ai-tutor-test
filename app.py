@@ -390,37 +390,38 @@ with st.sidebar:
     
     # ナビゲーションメニュー
     st.caption("ナビゲーション")
-    if st.button("🏠 ホーム (ポータル)", use_container_width=True):
+    # ★修正: key引数を追加してID重複エラーを防止
+    if st.button("🏠 ホーム (ポータル)", use_container_width=True, key="sb_home"):
         navigate_to("portal")
     
     col_nav1, col_nav2 = st.columns(2)
     with col_nav1:
-        if st.button("🤖 AIコーチ", use_container_width=True):
+        if st.button("🤖 AIコーチ", use_container_width=True, key="sb_chat"):
             navigate_to("chat")
-        if st.button("🏆 ランキング", use_container_width=True):
+        if st.button("🏆 ランキング", use_container_width=True, key="sb_ranking"):
             navigate_to("ranking")
     with col_nav2:
-        if st.button("📝 学習記録", use_container_width=True):
+        if st.button("📝 学習記録", use_container_width=True, key="sb_study_log"):
             navigate_to("study_log")
         # ★変更: バディ -> チーム
-        if st.button("👥 チーム", use_container_width=True):
+        if st.button("👥 チーム", use_container_width=True, key="sb_team"):
             navigate_to("team")
     
-    if st.button("💬 掲示板", use_container_width=True):
+    if st.button("💬 掲示板", use_container_width=True, key="sb_board"):
             navigate_to("board")
 
     # ★追加: 管理者の場合のみ表示する専用メニューボタン
     if user_role == "global_admin":
         st.markdown("---")
         st.caption("管理者機能")
-        if st.button("🛠 管理者メニュー", use_container_width=True, type="primary"):
+        if st.button("🛠 管理者メニュー", use_container_width=True, type="primary", key="sb_admin_menu"):
             navigate_to("admin_menu")
     
     st.markdown("---")
 
     # AIコーチ画面の場合のみ「会話履歴削除」を表示
     if st.session_state.current_page == "chat":
-        if st.button("🗑️ 会話履歴を全削除"):
+        if st.button("🗑️ 会話履歴を全削除", key="sb_clear_history"):
             with st.spinner("履歴を保存して削除中..."):
                 try:
                     history_stream = user_ref.collection("history").order_by("timestamp").stream()
@@ -460,7 +461,7 @@ with st.sidebar:
                 st.rerun()
         st.markdown("---")
 
-    if st.button("ログアウト", use_container_width=True):
+    if st.button("ログアウト", use_container_width=True, key="sb_logout"):
         st.session_state.user_info = None
         st.session_state.messages = []
         st.session_state.messages_loaded = False
