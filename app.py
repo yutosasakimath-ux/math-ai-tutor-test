@@ -355,6 +355,344 @@ if st.session_state.user_info is None:
                         st.info("※22日verの画面へ移動します")
                         time.sleep(0.5)
                         st.rerun()
+        
+        # ★削除: ログイン画面での新規登録機能は削除し、ログイン後の管理者メニューへ移動
+
+    st.stop()
+
+# =========================================================
+# ログイン済みユーザーの世界
+# =========================================================
+
+user_id = st.session_state.user_info["uid"]
+user_email = st.session_state.user_info["email"]
+user_role = st.session_state.get("user_role", "student") # ロール取得
+
+user_ref = db.collection("users").document(user_id)
+if "user_name" not in st.session_state:
+    try:
+        user_doc = user_ref.get()
+        if not user_doc.exists:
+            user_data = {"email": user_email, "created_at": firestore.SERVER_TIMESTAMP} 
+            user_ref.set(user_data)
+            st.session_state.user_name = "ゲスト"
+        else:
+            user_data = user_doc.to_dict()
+            st.session_state.user_name = user_data.get("name", "ゲスト")
+    except Exception as e:
+        st.session_state.user_name = "ゲスト"
+
+student_name = st.session_state.user_name
+
+# --- 6. サイドバー (機能改修版) ---
+with st.sidebar:
+    st.header(f"ようこそ、{student_name}さん")
+    
+    # ナビゲーションメニュー
+    st.caption("ナビゲーション")
+    if st.button("🏠 ホーム (ポータル)", use_container_width=True):
+        navigate_to("portal")
+    
+    col_nav1, col_nav2 = st.columns(2)
+    with col_nav1:
+        if st.button("🤖 AIコーチ", use_container_width=True):
+            navigate_to("chat")
+        if st.button("🏆 ランキング", use_container_width=True):
+            navigate_to("ranking")
+    with col_nav2:
+        if st.button("📝 学習記録", use_container_width=True):
+            navigate_to("study_log")
+        # ★変更: バディ -> チーム
+        if st.button("👥 チーム", use_container_width=True):
+            navigate_to("team")
+    
+    if st.button("💬 掲示板", use_container_width=True):
+            navigate_to("board")
+
+    # ★追加: 管理者の場合のみ表示する専用メニューボタン
+    if user_role == "global_admin":
+        st.markdown("---")
+        st.caption("管理者機能")
+        if st.button("🛠 管理者メニュー", use_container_width=True, type="primary"):
+            navigate_to("admin_menu")
+    
+    st.markdown("---")
+
+    # AIコーチ画面の場合のみ「会話履歴削除」を表示
+    if st.session_state.current_page == "chat":
+        if st.button("🗑️ 会話履歴を全削除"):
+            with st.spinner("履歴を保存して削除中..."):
+                try:
+                    history_stream = user_ref.collection("history").order_by("timestamp").stream()
+                    session_logs = []
+                    batch = db.batch()
+                    doc_count = 0
+                    
+                    for doc in history_stream:
+                        data = doc.to_dict()
+                        session_logs.append(data)
+                        batch.delete(doc.reference)
+                        doc_count += 1
+                        
+                        if doc_count >= 400:
+                            batch.commit()
+                            batch = db.batch()
+                            doc_count = 0
+                    
+                    if doc_count > 0:
+                        batch.commit()
+
+                    if session_logs:
+                        user_ref.collection("archived_sessions").add({
+                            "archived_at": firestore.SERVER_TIMESTAMP,
+                            "messages": session_logs,
+                            "note": "ユーザーによる全削除時のバックアップ"
+                        })
+                except Exception as e:
+                    st.error(f"ログ保存エラー: {e}")
+
+                st.session_state.last_report = "" 
+                st.session_state.messages = [] 
+                st.session_state.messages_loaded = True 
+                st.session_state.debug_logs = [] 
+                st.success("履歴をリセットしました")
+                time.sleep(1)
+                st.rerun()
+        st.markdown("---")
+
+    if st.button("ログアウト", use_container_width=True):
+        st.session_state.user_info = None
+        st.session_state.messages = []
+        st.session_state.messages_loaded = False
+        st.session_state.debug_logs = []
+        keys_to_remove = ["user_name", "current_page", "is_anon_ranking", "user_role"]
+        for k in keys_to_remove:
+            if k in st.session_state:
+                del st.session_state[k]
+        st.rerun()
+
+# =========================================================
+# 各画面の描画関数定義
+# =========================================================
+
+# ★新規追加: 管理者専用メニュー画面
+def render_admin_menu_page():
+    """管理者専用の機能集約画面"""
+    # セキュリティチェック: 管理者権限がない場合はポータルへ強制送還
+    if st.session_state.get("user_role") != "global_admin":
+        st.error("権限がありません。")
+        time.sleep(1)
+        navigate_to("portal")
+        return
+
+    st.title("🛠 システム管理者メニュー")
+    st.info(f"ログイン中: {st.session_state.user_info.get('email')}")
+
+    # 機能ごとにタブで整理
+    tab1, tab2, tab3 = st.tabs(["📊 ダッシュボード", "👤 ユーザー管理", "⚙️ システム設定"])
+
+    # --- タブ1: ダッシュボード (コスト・ログ) ---
+    with tab1:
+        st.subheader("💰 コスト分析 & ログ")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### モデル稼働状況")
+            st.info(f"**最後に使用したモデル:** `{st.session_state.last_used_model}`")
+        
+        with col2:
+            st.markdown("#### コスト試算")
+            if st.button("📊 直近1000件から試算", key="admin_cost_calc_tab"):
+                with st.spinner("集計中..."):
+                    try:
+                        INPUT_PRICE_PER_M = 0.50 
+                        OUTPUT_PRICE_PER_M = 3.00
+                        USD_JPY = 155.5
+                        SYSTEM_PROMPT_EST_LEN = 700 
+                        
+                        logs_ref = user_ref.collection("full_conversation_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1000)
+                        docs = logs_ref.stream()
+                        logs = [d.to_dict() for d in docs]
+                        
+                        if logs:
+                            total_input_chars = 0
+                            total_output_chars = 0
+                            history_buffer_len = 0
+                            for log in logs:
+                                content = log.get("content", "")
+                                content_len = len(content)
+                                img_cost = 0
+                                if "(※画像を送信しました)" in content:
+                                    img_cost = 300
+                                if log.get("role") == "user":
+                                    current_input = SYSTEM_PROMPT_EST_LEN + history_buffer_len + content_len + img_cost
+                                    total_input_chars += current_input
+                                    history_buffer_len += content_len
+                                elif log.get("role") == "model":
+                                    total_output_chars += content_len
+                                    history_buffer_len += content_len
+                            input_cost_usd = (total_input_chars / 1_000_000) * INPUT_PRICE_PER_M
+                            output_cost_usd = (total_output_chars / 1_000_000) * OUTPUT_PRICE_PER_M
+                            total_jpy = (input_cost_usd + output_cost_usd) * USD_JPY
+                            st.metric("推定総コスト", f"¥ {total_jpy:.2f}")
+                        else:
+                            st.warning("ログなし")
+                    except Exception as e:
+                        st.error(f"計算エラー: {e}")
+
+        st.markdown("---")
+        st.markdown("#### 🛠 デバッグログ")
+        if st.session_state.debug_logs:
+            with st.expander("ログを表示", expanded=True):
+                for i, log in enumerate(reversed(st.session_state.debug_logs)):
+                    st.code(log, language="text")
+                if st.button("ログ消去", key="admin_clear_log_tab"):
+                    st.session_state.debug_logs = []
+                    st.rerun()
+        else:
+            st.caption("現在エラーログはありません")
+
+    # --- タブ2: ユーザー管理 (新規作成) ---
+    with tab2:
+        st.subheader("👤 新規アカウント作成")
+        st.caption("管理者として新規ユーザーを作成します。作成後、生徒にメールアドレスとパスワードを伝えてください。")
+        
+        with st.form("admin_signup_form_tab"):
+            col_u1, col_u2 = st.columns(2)
+            with col_u1:
+                new_name_input = st.text_input("生徒のお名前")
+                new_email = st.text_input("新規メールアドレス")
+            with col_u2:
+                new_password = st.text_input("新規パスワード")
+                # 必要であればここでロール選択などを追加可能
+            
+            submit_new = st.form_submit_button("アカウントを作成する")
+            
+            if submit_new:
+                if not new_name_input or not new_email or not new_password:
+                    st.error("全ての項目を入力してください")
+                else:
+                    resp = sign_up_with_email(new_email, new_password)
+                    if "error" in resp:
+                        st.error(f"作成失敗: {resp['error']['message']}")
+                    else:
+                        new_uid = resp["localId"]
+                        try:
+                            db.collection("users").document(new_uid).set({
+                                "name": new_name_input,
+                                "email": new_email,
+                                "created_at": firestore.SERVER_TIMESTAMP,
+                                "totalStudyMinutes": 0,
+                                "isAnonymousRanking": False,
+                                "role": "student"
+                            })
+                            st.success(f"アカウント作成成功！\n名前: {new_name_input}\nEmail: {new_email}")
+                        except Exception as e:
+                            st.error(f"データベース登録エラー: {e}")
+
+    # --- タブ3: システム設定 (モデル一覧など) ---
+    with tab3:
+        st.subheader("⚙️ システム設定 & ツール")
+        
+        if st.button("📡 利用可能なGeminiモデル一覧を取得", key="admin_model_list_tab"):
+            if not GEMINI_API_KEY:
+                st.error("APIキーが設定されていません")
+            else:
+                try:
+                    genai.configure(api_key=GEMINI_API_KEY)
+                    models = genai.list_models()
+                    available_models = []
+                    for m in models:
+                        if "generateContent" in m.supported_generation_methods:
+                            available_models.append(m.name.replace("models/", ""))
+                    st.code("\n".join(available_models))
+                except Exception as e:
+                    st.error(f"取得エラー: {e}")
+        
+        st.markdown("#### 📝 学習まとめレポート作成 (デバッグ用)")
+        if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen_tab"):
+            st.info("※チャット画面のデバッグメニューと同じロジックがここに実装されます（今回は省略）")
+
+    st.markdown("---")
+    if st.button("← ポータルへ戻る"):
+        navigate_to("portal")
+
+def render_portal_page():
+    """ポータル画面（ホーム）"""
+    apply_portal_css()
+    st.title(f"こんにちは、{student_name}さん！👋")
+    
+    # 簡易サマリ
+    user_doc = user_ref.get().to_dict()
+    total_minutes = user_doc.get("totalStudyMinutes", 0)
+    total_hours = total_minutes // 60
+    
+    st.info(f"📚 **累計学習時間**: {total_hours}時間 {total_minutes % 60}分")
+
+    # メインナビゲーション
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🤖 AIコーチ\n(チャット)", use_container_width=True):
+            navigate_to("chat")
+        if st.button("🏆 ランキング\n(みんなと競う)", use_container_width=True):
+            navigate_to("ranking")
+        if st.button("💬 掲示板\n(Q&A)", use_container_width=True):
+            navigate_to("board")
+            
+    with col2:
+        if st.button("📝 学習記録\n(時間を記録)", use_container_width=True):
+            navigate_to("study_log")
+        # ★変更: バディ -> チーム
+        if st.button("👥 チーム\n(みんなで頑張る)", use_container_width=True):
+            navigate_to("team")
+        
+        # ★追加: 管理者の場合、ここにボタンを追加
+        if st.session_state.get("user_role") == "global_admin":
+            if st.button("🛠 管理者メニュー\n(設定・管理)", use_container_width=True, type="primary"):
+                navigate_to("admin_menu")
+    
+    st.markdown("---")
+    
+    # 設定・サポート
+    with st.expander("⚙️ 設定・サポート"):
+        st.markdown("### 👤 プロフィール設定")
+        
+        # 名前変更
+        new_name = st.text_input("表示名（AIが呼びかける名前）", value=student_name, key="setting_name")
+        if new_name != student_name:
+            if st.button("名前を更新"):
+                user_ref.update({"name": new_name})
+                st.session_state.user_name = new_name
+                st.success("名前を更新しました")
+                time.sleep(1)
+                st.rerun()
+        
+        # ランキング匿名設定
+        if "is_anon_ranking" not in st.session_state:
+            st.session_state.is_anon_ranking = user_doc.get("isAnonymousRanking", False)
+        
+        is_anon = st.checkbox("ランキングで匿名にする", value=st.session_state.is_anon_ranking, key="setting_anon")
+        if is_anon != st.session_state.is_anon_ranking:
+            user_ref.update({"isAnonymousRanking": is_anon})
+            st.session_state.is_anon_ranking = is_anon
+            st.success("匿名設定を更新しました")
+            
+        st.markdown("---")
+        st.markdown("### 📢 ご意見・不具合報告")
+        with st.form("feedback_form_portal", clear_on_submit=True):
+            feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の機能が欲しいです")
+            feedback_submit = st.form_submit_button("送信")
+            if feedback_submit and feedback_content:
+                db.collection("feedback").add({
+                    "user_id": user_id,
+                    "email": user_email,
+                    "content": feedback_content,
+                    "timestamp": firestore.SERVER_TIMESTAMP
+                })
+                st.success("送信しました。ありがとうございます！")
+        
+        # ★変更: パスワード入力式の「管理者メニュー」は削除しました。
+        # 代わりに上部のボタンまたはサイドバーからアクセスします。
 
         # ★追加: 22日verにあった新規アカウント作成機能を復活
         st.markdown("---")
@@ -1390,7 +1728,9 @@ elif current_page == "ranking":
     render_ranking_page()
 elif current_page == "board":
     render_board_page()
-elif current_page == "team": # ★変更
+elif current_page == "team":
     render_team_page()
+elif current_page == "admin_menu": # ★追加: 管理者メニューへのルーティング
+    render_admin_menu_page()
 else:
     render_portal_page()
