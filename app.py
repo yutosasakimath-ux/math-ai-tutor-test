@@ -128,7 +128,37 @@ def ensure_japanese_font():
 def create_pdf(text_content, student_name):
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
-    p.drawString(100, 800, "Report")
+    width, height = A4
+    font_path = ensure_japanese_font()
+    font_name = "Helvetica"
+    if font_path:
+        try:
+            pdfmetrics.registerFont(TTFont('IPAexGothic', font_path))
+            font_name = 'IPAexGothic'
+        except Exception:
+            pass
+    p.setFont(font_name, 18)
+    p.drawString(20 * mm, height - 20 * mm, f"学習まとめレポート - {student_name}さん")
+    p.setFont(font_name, 10)
+    today_str = datetime.datetime.now(JST).strftime('%Y/%m/%d')
+    p.drawString(20 * mm, height - 30 * mm, f"作成日: {today_str}")
+    p.setFont(font_name, 11)
+    lines = text_content.split('\n')
+    max_char_per_line = 35 
+    line_height = 6 * mm
+    y_position = height - 50 * mm
+    for line in lines:
+        while True:
+            chunk = line[:max_char_per_line]
+            line = line[max_char_per_line:]
+            p.drawString(20 * mm, y_position, chunk)
+            y_position -= line_height
+            if y_position < 20 * mm:
+                p.showPage()
+                p.setFont(font_name, 11)
+                y_position = height - 30 * mm
+            if not line:
+                break
     p.save()
     buffer.seek(0)
     return buffer
@@ -350,6 +380,7 @@ with st.sidebar:
     else:
         # 管理者・先生用サイドバー
         st.header("管理者メニュー")
+        st.write(f"**{student_name}** さん")
         role_label = "開発者" if user_role == "global_admin" else "先生"
         st.caption(f"権限: {role_label}")
         
@@ -358,11 +389,10 @@ with st.sidebar:
         
         if user_role == "team_teacher":
             if st.button("📮 生徒連絡", use_container_width=True): navigate_to("admin_contact")
-            # (6) 教員から管理者への連絡機能
             if st.button("🆘 管理者へ連絡", use_container_width=True): navigate_to("teacher_to_admin")
         
         if user_role == "global_admin":
-            if st.button("📮 教員連絡", use_container_width=True): navigate_to("admin_contact") # 管理者は教員とも連絡可能にする
+            if st.button("📮 教員連絡", use_container_width=True): navigate_to("admin_contact")
             st.markdown("---")
             if st.button("👥 チーム作成", use_container_width=True): navigate_to("admin_create_team") 
             if st.button("🔑 権限管理", use_container_width=True): navigate_to("admin_roles")
@@ -383,15 +413,14 @@ def render_admin_home():
     role = st.session_state.user_role
     st.title("👨‍🏫 管理者ホーム")
     
+    st.subheader(f"ようこそ、{student_name} 先生")
+
     if role == "global_admin":
         st.info(f"全体管理者としてログイン中\nID: {user_email}")
+        st.warning("※プライバシー保護のため、管理者は生徒との直接連絡機能を使用できません。")
     else:
         t_name = st.session_state.get("managed_team_name", "担当チーム")
         st.info(f"チーム「{t_name}」の先生としてログイン中")
-
-    # (3) 未読表示機能は削除（今後実装予定のため非表示）
-    # target_team = st.session_state.managed_team_id
-    # unread_count = ... 
 
     st.markdown("### 📌 メニュー")
     
@@ -415,74 +444,54 @@ def render_admin_home():
         with col1:
             if st.button("📊 学習状況を確認する", use_container_width=True):
                 navigate_to("admin_learning")
+            if st.button("🆘 管理者へ連絡", use_container_width=True):
+                navigate_to("teacher_to_admin")
         with col2:
             if st.button("📮 生徒と連絡をとる", use_container_width=True):
                 navigate_to("admin_contact")
-            if st.button("🆘 管理者へ連絡", use_container_width=True):
-                navigate_to("teacher_to_admin")
 
 def render_admin_learning():
-    """(5) 学習状況確認 (タブで生徒名やチーム名を選ぶ)"""
+    """学習状況確認"""
     st.title("📊 学習状況の確認")
     role = st.session_state.user_role
     
-    tab_team, tab_student = st.tabs(["👥 チームコードで検索", "🧑‍🎓 生徒名で検索"])
-    
     users_list = []
     
-    with tab_team:
-        if role == "team_teacher":
-            # 先生は自分のチーム固定で自動表示
-            st.info(f"担当チーム: {st.session_state.get('managed_team_name', '不明')}")
-            team_id = st.session_state.managed_team_id
-            t_doc = db.collection("teams").document(team_id).get()
+    if role == "team_teacher":
+        st.info(f"担当チーム: {st.session_state.get('managed_team_name', '不明')}")
+        team_id = st.session_state.managed_team_id
+        t_doc = db.collection("teams").document(team_id).get()
+        if t_doc.exists:
+            member_ids = t_doc.to_dict().get("members", [])
+            for uid in member_ids:
+                u = db.collection("users").document(uid).get()
+                if u.exists:
+                    users_list.append(u.to_dict() | {"id": u.id})
+                    
+    else: 
+        all_teams_stream = db.collection("teams").limit(50).stream() 
+        all_teams = [t.to_dict() | {"id": t.id} for t in all_teams_stream]
+        
+        team_opts = {t["id"]: f"{t.get('name')} ({t.get('teamCode')})" for t in all_teams}
+        
+        selected_team_id = st.selectbox("確認するチームを選択", options=[""] + list(team_opts.keys()), format_func=lambda x: team_opts[x] if x else "選択してください")
+        
+        if selected_team_id:
+            t_doc = db.collection("teams").document(selected_team_id).get()
             if t_doc.exists:
                 member_ids = t_doc.to_dict().get("members", [])
                 for uid in member_ids:
                     u = db.collection("users").document(uid).get()
                     if u.exists:
                         users_list.append(u.to_dict() | {"id": u.id})
-        else:
-            search_team = st.text_input("チームコードを入力", placeholder="例: A1B2C3")
-            if search_team:
-                t_query = db.collection("teams").where("teamCode", "==", search_team.strip().upper()).stream()
-                target_team_doc = next(t_query, None)
-                if target_team_doc:
-                    st.success(f"チーム「{target_team_doc.to_dict().get('name')}」が見つかりました")
-                    member_ids = target_team_doc.to_dict().get("members", [])
-                    for uid in member_ids:
-                        u = db.collection("users").document(uid).get()
-                        if u.exists:
-                            users_list.append(u.to_dict() | {"id": u.id})
-                else:
-                    st.warning("チームが見つかりません")
 
-    with tab_student:
-        search_name = st.text_input("生徒名を入力", placeholder="例: 山田")
-        if search_name:
-            if role == "team_teacher":
-                team_id = st.session_state.managed_team_id
-                t_doc = db.collection("teams").document(team_id).get()
-                if t_doc.exists:
-                    member_ids = t_doc.to_dict().get("members", [])
-                    for uid in member_ids:
-                        u = db.collection("users").document(uid).get()
-                        if u.exists:
-                            u_data = u.to_dict()
-                            if search_name in u_data.get("name", ""):
-                                users_list.append(u_data | {"id": u.id})
-            else:
-                q = db.collection("users").where("name", ">=", search_name).where("name", "<=", search_name + "\uf8ff").limit(20)
-                docs = q.stream()
-                for d in docs:
-                    users_list.append(d.to_dict() | {"id": d.id})
-    
     if not users_list:
-        st.caption("検索条件を入力してください、または該当者がいません。")
+        if role == "global_admin":
+            st.caption("チームを選択してください。")
+        else:
+            st.caption("生徒が見つかりません。")
         return
 
-    users_list = {u['id']: u for u in users_list}.values()
-    users_list = list(users_list)
     users_list.sort(key=lambda x: x.get("totalStudyMinutes", 0), reverse=True)
     
     st.divider()
@@ -500,15 +509,13 @@ def render_admin_learning():
             st.caption(f"登録日: {target.get('created_at')}")
 
 def render_admin_contact():
-    """(2) 連絡機能（教員は自チームのみ、検索は生徒名タブ） + (4)入力フォーム統合"""
+    """連絡機能"""
     role = st.session_state.user_role
     
-    # (6) 管理者の場合、教員との連絡画面として機能させる
     if role == "global_admin":
         st.title("📮 教員・管理者連絡網")
         st.caption("教員からの相談や連絡を確認できます。")
         
-        # 教員リストを取得 (role=teacher)
         teachers_q = db.collection("users").where("role", "==", "teacher").stream()
         teachers = [d.to_dict() | {"id": d.id} for d in teachers_q]
         
@@ -522,12 +529,9 @@ def render_admin_contact():
         st.session_state.admin_chat_target = selected_tid
         
     else:
-        # 教員の場合：生徒との連絡
         st.title("📮 生徒との連絡")
         target_team = st.session_state.managed_team_id
         
-        # (2) チームコード入力欄を削除し、タブから生徒名を表示
-        # 自チームの生徒リストを取得
         t_doc = db.collection("teams").document(target_team).get()
         candidates = []
         if t_doc.exists:
@@ -546,7 +550,6 @@ def render_admin_contact():
         
         st.session_state.admin_chat_target = selected_sid
 
-    # --- チャット画面 (共通) ---
     target_uid = st.session_state.get("admin_chat_target")
 
     if target_uid:
@@ -559,10 +562,8 @@ def render_admin_contact():
         u_name = u_doc.to_dict().get("name")
         st.markdown(f"### 💬 {u_name} さんとのチャット")
         
-        # メッセージの保存先は admin_messages/{target_uid}/messages
         msgs_ref = db.collection("admin_messages").document(target_uid).collection("messages")
         
-        # 履歴表示
         all_msgs = msgs_ref.order_by("timestamp").stream()
         with st.container(height=400):
             for m in all_msgs:
@@ -571,10 +572,6 @@ def render_admin_contact():
                 content = d.get("content")
                 ts = d.get("timestamp")
                 t_str = ts.astimezone(JST).strftime('%m/%d %H:%M') if ts else ""
-                
-                # 表示ロジック:
-                # role=admin視点: teacher/student(相手) vs admin(自分)
-                # role=teacher視点: student/admin(相手) vs teacher(自分)
                 
                 is_me = False
                 if role == "global_admin":
@@ -591,7 +588,6 @@ def render_admin_contact():
                         st.write(content)
                         st.caption(f"{u_name} - {t_str}")
 
-        # (4) 連絡機能の中に入力フォームを統合
         with st.form("admin_send_msg_inline", clear_on_submit=True):
             txt = st.text_input("メッセージを入力")
             if st.form_submit_button("送信"):
@@ -602,20 +598,16 @@ def render_admin_contact():
                         "content": txt,
                         "timestamp": firestore.SERVER_TIMESTAMP,
                         "read": False,
-                        "recipient_id": target_uid # 念のため
+                        "recipient_id": target_uid 
                     })
                     st.success("送信しました")
                     time.sleep(0.5)
                     st.rerun()
 
 def render_teacher_to_admin():
-    """(6) 教員から管理者への連絡機能"""
+    """教員から管理者への連絡機能"""
     st.title("🆘 管理者へ連絡")
     st.caption("システム管理者への相談や連絡はこちらから")
-    
-    # 教員自身のIDの下にメッセージを保存するが、
-    # 管理者が見る際は admin_messages/{teacher_uid}/messages を見る形に統一
-    # ここでは相手＝管理者
     
     my_uid = user_id
     msgs_ref = db.collection("admin_messages").document(my_uid).collection("messages")
@@ -624,17 +616,17 @@ def render_teacher_to_admin():
     with st.container(height=400):
         for m in all_msgs:
             d = m.to_dict()
-            sender = d.get("sender") # teacher or admin
+            sender = d.get("sender") 
             content = d.get("content")
             ts = d.get("timestamp")
             t_str = ts.astimezone(JST).strftime('%m/%d %H:%M') if ts else ""
             
             if sender == "teacher":
-                with st.chat_message("user", avatar="👨‍🏫"): # 自分
+                with st.chat_message("user", avatar="👨‍🏫"): 
                     st.write(content)
                     st.caption(t_str)
             elif sender == "admin":
-                with st.chat_message("assistant", avatar="🛠"): # 管理者
+                with st.chat_message("assistant", avatar="🛠"): 
                     st.write(content)
                     st.caption(f"管理者 - {t_str}")
     
@@ -654,7 +646,7 @@ def render_teacher_to_admin():
                 st.rerun()
 
 def render_admin_create_team():
-    """(8) 管理者専用チーム作成機能（教員複数選択対応）"""
+    """管理者専用チーム作成機能"""
     st.title("👥 チーム作成")
     st.caption("新しいクラス（チーム）を作成し、担当教員と初期メンバーを設定できます。")
     
@@ -670,7 +662,6 @@ def render_admin_create_team():
         user_opts = {u['id']: f"{u.get('name')} ({u.get('email')})" for u in all_users}
         
         st.markdown("### 👨‍🏫 担当教員の選択 (複数可)")
-        # multiselectに変更
         selected_teacher_uids = st.multiselect(
             "教員アカウントを選択（複数選択可）", 
             options=list(user_opts.keys()), 
@@ -693,8 +684,6 @@ def render_admin_create_team():
                 st.error("担当教員を少なくとも1名選択してください")
             else:
                 t_code = str(uuid.uuid4())[:6].upper()
-                
-                # 教員もメンバーリストに含める
                 final_members = list(set(selected_members + selected_teacher_uids))
 
                 new_ref = db.collection("teams").add({
@@ -708,12 +697,10 @@ def render_admin_create_team():
                 new_team_id = new_ref[1].id
                 
                 batch = db.batch()
-                # メンバーのチームID更新
                 for mid in final_members:
                     ref = db.collection("users").document(mid)
                     batch.update(ref, {"teamId": new_team_id})
                 
-                # 教員権限の付与 (複数人対応)
                 for tid in selected_teacher_uids:
                     t_ref = db.collection("users").document(tid)
                     batch.update(t_ref, {
@@ -725,7 +712,7 @@ def render_admin_create_team():
                 st.success(f"チーム「{t_name}」を作成しました！\n担当教員({len(selected_teacher_uids)}名)を設定しました。")
 
 def render_admin_roles():
-    """権限管理 (全体管理者のみ)"""
+    """権限管理"""
     st.title("🔑 教員権限の管理")
     if st.session_state.user_role != "global_admin":
         st.error("権限がありません")
@@ -796,10 +783,14 @@ def render_admin_signup():
 # =========================================================
 def render_team_page():
     st.title("👥 チーム機能")
+    
     my_doc = user_ref.get().to_dict()
+    if not my_doc:
+        st.error("ユーザー情報の取得に失敗しました")
+        return
+
     my_team_id = my_doc.get("teamId")
-    # ユーザー権限確認用
-    is_teacher_or_admin = user_doc.get("role") in ["teacher", "admin"]
+    is_teacher_or_admin = my_doc.get("role") in ["teacher", "admin"]
     
     if my_team_id:
         team_ref = db.collection("teams").document(my_team_id)
@@ -827,7 +818,6 @@ def render_team_page():
                     st.write(f"- **{m_name}**{me_mark}")
         
         st.markdown("---")
-        # (1) 教員権限を持つ人はチームから脱退できないようにする
         if is_teacher_or_admin:
             st.info("※教員・管理者はチームから脱退できません。管理者に連絡してください。")
         else:
@@ -882,39 +872,24 @@ def render_team_page():
                     else:
                         st.error("チームが見つかりませんでした。")
 
-# ... (生徒用その他ページ) ...
+# ... (生徒用その他ページ: 変更なしだが省略せずに記述) ...
 def render_contact_page():
-    """(7) 生徒→教員/管理者の送信先選択付き連絡機能"""
     st.title("📮 連絡・相談")
     st.caption("先生や管理者にメッセージを送れます。")
     
-    # 送信先選択 (自分のチームの先生、または管理者)
-    # 自分のチームの教員を取得
     my_doc = user_ref.get().to_dict()
     my_team_id = my_doc.get("teamId")
     
     recipient_opts = {}
-    
-    # 1. 管理者へのルート (常にあり)
     recipient_opts["admin"] = "システム管理者"
     
-    # 2. チーム教員へのルート
     if my_team_id:
         t_doc = db.collection("teams").document(my_team_id).get()
         if t_doc.exists:
-            # チームメンバーの中で role='teacher' の人を探す
-            # メンバー数が多いと高負荷になるため、簡易的にチームに紐づく教員を表示するか、
-            # もしくは「担任の先生」として抽象化して送る（受け取り側でチームIDを見て判断）
-            # ここではシンプルに「担任の先生」という宛先を作り、データには "sender: student" を入れる既存ロジックを使う
-            # ただし、特定の先生を選ばせたい場合は検索が必要
             recipient_opts["teacher"] = "担任の先生"
 
-    # セレクトボックス
     target_role = st.selectbox("送信先を選択", list(recipient_opts.keys()), format_func=lambda x: recipient_opts[x])
     
-    # メッセージ履歴の取得 (宛先によってフィルタリングすべきだが、既存データとの兼ね合いで
-    # admin_messages/{user_id}/messages を全部出しつつ、表示側で分けるか、
-    # あるいは全て表示するか。今回はすべて表示し、「誰宛か」は送る時のメタデータとする)
     msgs_ref = db.collection("admin_messages").document(user_id).collection("messages")
     query = msgs_ref.order_by("timestamp")
     docs = query.stream()
@@ -922,12 +897,9 @@ def render_contact_page():
     with st.container(height=500):
         for doc in docs:
             data = doc.to_dict()
-            sender = data.get("sender") # student, teacher, admin
+            sender = data.get("sender") 
             content = data.get("content")
             ts = data.get("timestamp")
-            
-            # メッセージの宛先情報があれば表示に反映（オプション）
-            # recipient = data.get("recipient_role", "teacher") 
             
             if ts:
                 time_str = ts.astimezone(JST).strftime('%m/%d %H:%M')
@@ -942,7 +914,7 @@ def render_contact_page():
                 with st.chat_message("assistant", avatar="🛠"):
                     st.write(content)
                     st.caption(f"管理者 - {time_str}")
-            else: # teacher
+            else: 
                 with st.chat_message("assistant", avatar="👨‍🏫"):
                     st.write(content)
                     st.caption(f"先生 - {time_str}")
@@ -953,9 +925,6 @@ def render_contact_page():
         
         if submit and user_input:
             try:
-                # 宛先情報を付加して保存
-                # target_role: "teacher" or "admin"
-                # 教員画面、管理者画面それぞれでフィルタリングして表示する運用を想定
                 msgs_ref.add({
                     "sender": "student",
                     "recipient_role": target_role,
@@ -968,11 +937,6 @@ def render_contact_page():
                 st.rerun()
             except Exception as e:
                 st.error(f"送信エラー: {e}")
-
-# ... (render_portal_page, render_study_log_page, render_ranking_page, render_board_page, render_chat_page は既存のまま) ...
-# コードが長くなりすぎるため、変更のないこれらの関数は省略せずに記述する必要がありますが、
-# ここではコンテキスト長制限回避のため省略表記とせず、前回のv8の内容を維持して出力します。
-# 実際にはここにv8の当該関数群が入ります。
 
 def render_portal_page():
     apply_portal_css()
@@ -1423,7 +1387,7 @@ if "current_page" not in st.session_state:
     if st.session_state.user_role == "student":
         st.session_state.current_page = "portal"
     else:
-        st.session_state.current_page = "admin_home" # ★管理者初期ページ
+        st.session_state.current_page = "admin_home" 
 
 current_page = st.session_state.current_page
 user_role = st.session_state.user_role
@@ -1439,14 +1403,13 @@ if user_role == "student":
     else: render_portal_page()
 
 elif user_role in ["global_admin", "team_teacher"]:
-    # ★管理者ルーティング拡張
     if current_page == "admin_home": render_admin_home()
     elif current_page == "admin_learning": render_admin_learning()
     elif current_page == "admin_contact": render_admin_contact()
     elif current_page == "admin_roles": render_admin_roles()
     elif current_page == "admin_create_team": render_admin_create_team() 
     elif current_page == "admin_signup": render_admin_signup()
-    elif current_page == "teacher_to_admin": render_teacher_to_admin() # (6)追加
+    elif current_page == "teacher_to_admin": render_teacher_to_admin() 
     else: render_admin_home()
 else:
     st.error("不正な状態です。")
