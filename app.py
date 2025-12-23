@@ -31,6 +31,8 @@ def apply_chat_css():
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {display:none;}
+    
+    /* チャット入力フォームのスタイル調整 */
     .main [data-testid="stForm"] {
         border: 1px solid #ddd;
         border-radius: 10px;
@@ -47,6 +49,47 @@ def apply_chat_css():
     }
     .main .block-container {
         padding-bottom: 150px; 
+    }
+
+    /* ファイルアップローダーをカメラアイコンにするスタイル */
+    [data-testid="stFileUploader"] {
+        width: 50px;
+        margin-top: 0px;
+        padding-top: 0;
+    }
+    [data-testid="stFileUploader"] section {
+        padding: 0;
+        min-height: 44px;
+        background-color: transparent;
+        border: 1px solid #ccc; /* 枠線 */
+        border-radius: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: transparent; 
+    }
+    [data-testid="stFileUploader"] section > * {
+        display: none !important; /* デフォルトの文字を消す */
+    }
+    [data-testid="stFileUploader"] section::after {
+        content: "📷";  /* カメラアイコン */
+        font-size: 24px;
+        color: #555;
+        display: block;
+        cursor: pointer;
+    }
+    /* ファイル選択後のスタイル */
+    [data-testid="stFileUploader"]:has(input[type="file"]:valid) section {
+        background-color: #e0f7fa;
+        border-color: #00bcd4;
+    }
+    [data-testid="stFileUploader"]:has(input[type="file"]:valid) section::after {
+        content: "✅"; /* 選択済み */
+    }
+    
+    .stTextArea textarea {
+        font-size: 16px;
+        padding: 10px;
     }
     </style>
     """
@@ -323,7 +366,10 @@ with st.sidebar:
         
         if st.button("🏠 ホーム", use_container_width=True): navigate_to("admin_home")
         if st.button("📊 学習状況", use_container_width=True): navigate_to("admin_learning")
-        if st.button("📮 生徒連絡", use_container_width=True): navigate_to("admin_contact")
+        
+        # (2) 管理者(global_admin)には連絡ボタンを表示しない
+        if user_role == "team_teacher":
+            if st.button("📮 生徒連絡", use_container_width=True): navigate_to("admin_contact")
         
         if user_role == "global_admin":
             st.markdown("---")
@@ -342,10 +388,14 @@ with st.sidebar:
 # =========================================================
 def get_unread_senders(target_team_id=None):
     try:
+        # 未読メッセージを検索 (Collection Group Query)
+        # ※インデックス作成が必要になる場合があります: sender ASC, read ASC
         query = db.collection_group("messages").where("sender", "==", "student").where("read", "==", False)
         docs = query.stream()
+        
         unread_uids = set()
         for d in docs:
+            # メッセージの親ドキュメントのIDがユーザーID
             parent_doc = d.reference.parent.parent
             if parent_doc:
                 unread_uids.add(parent_doc.id)
@@ -357,8 +407,10 @@ def get_unread_senders(target_team_id=None):
                 unread_uids = unread_uids.intersection(team_members)
             else:
                 return []
+        
         return list(unread_uids)
     except Exception as e:
+        # インデックス未作成エラーなどを想定
         print(f"Unread check error: {e}")
         return []
 
@@ -373,19 +425,20 @@ def render_admin_home():
     
     if role == "global_admin":
         st.info(f"全体管理者としてログイン中\nID: {user_email}")
+        st.warning("※プライバシー保護のため、管理者は生徒との直接連絡機能を使用できません。")
     else:
         t_name = st.session_state.get("managed_team_name", "担当チーム")
         st.info(f"チーム「{t_name}」の先生としてログイン中")
 
-    # 未読チェック
-    target_team = st.session_state.managed_team_id if role == "team_teacher" else None
-    unread_uids = get_unread_senders(target_team)
-    unread_count = len(unread_uids)
-    
-    if unread_count > 0:
-        st.warning(f"🔔 **{unread_count}名** の生徒から未読メッセージが届いています！")
-    else:
-        st.success("現在、未読のメッセージはありません。")
+        # (2) 未読チェック: 教員(team_teacher)のみ実行
+        target_team = st.session_state.managed_team_id
+        unread_uids = get_unread_senders(target_team)
+        unread_count = len(unread_uids)
+        
+        if unread_count > 0:
+            st.error(f"🔔 **{unread_count}名** の生徒から未読メッセージが届いています！")
+        else:
+            st.success("現在、未読のメッセージはありません。")
 
     st.markdown("### 📌 メニュー")
     col1, col2 = st.columns(2)
@@ -393,17 +446,25 @@ def render_admin_home():
     with col1:
         if st.button("📊 学習状況を確認する\n(チーム・生徒検索)", use_container_width=True):
             navigate_to("admin_learning")
-        if st.button("🔑 教員権限の管理\n(全体管理者のみ)", disabled=(role!="global_admin"), use_container_width=True):
-            navigate_to("admin_roles")
-        if st.button("👥 チーム作成\n(全体管理者のみ)", disabled=(role!="global_admin"), use_container_width=True):
-            navigate_to("admin_create_team")
+        
+        if role == "global_admin":
+            if st.button("🔑 教員権限の管理\n(全体管理者のみ)", use_container_width=True):
+                navigate_to("admin_roles")
+            if st.button("👥 チーム作成\n(全体管理者のみ)", use_container_width=True):
+                navigate_to("admin_create_team")
             
     with col2:
-        btn_label = f"📮 生徒と連絡をとる\n(未読: {unread_count}件)"
-        if st.button(btn_label, use_container_width=True):
-            navigate_to("admin_contact")
-        if st.button("👤 新規アカウント作成\n(全体管理者のみ)", disabled=(role!="global_admin"), use_container_width=True):
-            navigate_to("admin_signup")
+        # (2) 管理者には連絡ボタンを表示しない
+        if role == "team_teacher":
+            btn_label = f"📮 生徒と連絡をとる"
+            if unread_count > 0:
+                btn_label += f" (未読: {unread_count}件)"
+            if st.button(btn_label, use_container_width=True):
+                navigate_to("admin_contact")
+        
+        if role == "global_admin":
+            if st.button("👤 新規アカウント作成\n(全体管理者のみ)", use_container_width=True):
+                navigate_to("admin_signup")
 
 def render_admin_learning():
     """(1) 学習状況確認（検索機能拡張: タブ分け）"""
@@ -486,11 +547,18 @@ def render_admin_learning():
             st.caption(f"登録日: {target.get('created_at')}")
 
 def render_admin_contact():
-    """(2) 連絡機能（検索機能拡張: 未読/検索タブ分け）"""
+    """(2) 連絡機能（未読/検索タブ分け） ※管理者はアクセス不可"""
     st.title("📮 生徒との連絡")
     role = st.session_state.user_role
-    target_team = st.session_state.managed_team_id if role == "team_teacher" else None
+    
+    # 管理者ブロック
+    if role == "global_admin":
+        st.error("管理者権限では生徒のメッセージを閲覧できません。")
+        if st.button("ホームに戻る"):
+            navigate_to("admin_home")
+        return
 
+    target_team = st.session_state.managed_team_id
     tab_unread, tab_search = st.tabs(["🔔 未読メッセージ", "🔍 生徒を検索して連絡"])
 
     target_uid_for_chat = None
@@ -540,10 +608,7 @@ def render_admin_contact():
                             u_dat = u.to_dict()
                             if s_student_name in u_dat.get("name", ""):
                                 candidates.append(u_dat | {"id": u.id})
-            else:
-                q = db.collection("users").where("name", ">=", s_student_name).where("name", "<=", s_student_name + "\uf8ff").limit(20)
-                for d in q.stream():
-                    candidates.append(d.to_dict() | {"id": d.id})
+            # 管理者の検索機能は削除済 (到達しないはずだが念のため)
 
         unique_candidates = {c['id']: c for c in candidates}.values()
         
@@ -570,6 +635,7 @@ def render_admin_contact():
         
         msgs_ref = db.collection("admin_messages").document(target_uid_for_chat).collection("messages")
         
+        # 既読処理
         unread_msgs = msgs_ref.where("sender", "==", "student").where("read", "==", False).stream()
         batch = db.batch()
         has_unread = False
@@ -612,9 +678,9 @@ def render_admin_contact():
                     st.rerun()
 
 def render_admin_create_team():
-    """(3) 管理者専用チーム作成機能（メンバー選択機能付き）"""
+    """(1) 管理者専用チーム作成機能（教員権限付与機能付き）"""
     st.title("👥 チーム作成")
-    st.caption("新しいクラス（チーム）を作成し、初期メンバーを追加できます。")
+    st.caption("新しいクラス（チーム）を作成し、担当教員と初期メンバーを設定できます。")
     
     if st.session_state.user_role != "global_admin":
         st.error("この機能は全体管理者のみ利用可能です。")
@@ -623,35 +689,66 @@ def render_admin_create_team():
     with st.form("create_team_admin_form"):
         t_name = st.text_input("チーム名（例: 3年B組）")
         
-        # メンバー選択 (上限100件)
-        all_users = db.collection("users").limit(100).stream()
-        user_opts = {}
-        for u in all_users:
-            d = u.to_dict()
-            label = f"{d.get('name')} ({d.get('email')})"
-            user_opts[u.id] = label
-            
-        selected_members = st.multiselect("初期メンバーを選択（後からでも追加可能）", options=list(user_opts.keys()), format_func=lambda x: user_opts[x])
+        # 全ユーザー取得（本来はもっと効率的な検索UIが必要）
+        all_users_stream = db.collection("users").limit(100).stream()
+        all_users = [u.to_dict() | {"id": u.id} for u in all_users_stream]
+        user_opts = {u['id']: f"{u.get('name')} ({u.get('email')})" for u in all_users}
         
-        submit = st.form_submit_button("チームを作成")
+        # 担当教員の選択
+        st.markdown("### 👨‍🏫 担当教員の選択")
+        st.caption("選択したアカウントに、このチームの教員権限(Teacher role)が付与されます。")
+        selected_teacher_uid = st.selectbox(
+            "教員アカウントを選択", 
+            options=[""] + list(user_opts.keys()), 
+            format_func=lambda x: user_opts[x] if x else "選択してください"
+        )
+
+        # メンバー選択
+        st.markdown("### 🧑‍🎓 生徒の選択")
+        selected_members = st.multiselect(
+            "初期メンバーを選択（後からでも追加可能）", 
+            options=list(user_opts.keys()), 
+            format_func=lambda x: user_opts[x]
+        )
         
-        if submit and t_name:
-            t_code = str(uuid.uuid4())[:6].upper()
-            
-            new_ref = db.collection("teams").add({
-                "name": t_name,
-                "teamCode": t_code,
-                "members": selected_members, 
-                "creatorId": user_id,
-                "createdAt": firestore.SERVER_TIMESTAMP,
-                "isOfficial": True # 管理者作成フラグ
-            })
-            new_team_id = new_ref[1].id
-            
-            for mid in selected_members:
-                db.collection("users").document(mid).update({"teamId": new_team_id})
+        submit = st.form_submit_button("チームを作成 & 権限付与")
+        
+        if submit:
+            if not t_name:
+                st.error("チーム名を入力してください")
+            elif not selected_teacher_uid:
+                st.error("担当教員を必ず選択してください")
+            else:
+                t_code = str(uuid.uuid4())[:6].upper()
                 
-            st.success(f"チーム「{t_name}」を作成しました！\n招待コード: {t_code}")
+                # 教員もメンバーリストに含めるか？ -> 含めておくとリスト表示などで便利
+                final_members = list(set(selected_members + [selected_teacher_uid]))
+
+                new_ref = db.collection("teams").add({
+                    "name": t_name,
+                    "teamCode": t_code,
+                    "members": final_members, 
+                    "creatorId": user_id,
+                    "createdAt": firestore.SERVER_TIMESTAMP,
+                    "isOfficial": True 
+                })
+                new_team_id = new_ref[1].id
+                
+                # 生徒の所属チーム更新
+                batch = db.batch()
+                for mid in final_members:
+                    ref = db.collection("users").document(mid)
+                    batch.update(ref, {"teamId": new_team_id})
+                
+                # 教員権限の付与 (role=teacher, managedTeamId=...)
+                teacher_ref = db.collection("users").document(selected_teacher_uid)
+                batch.update(teacher_ref, {
+                    "role": "teacher",
+                    "managedTeamId": new_team_id
+                })
+                
+                batch.commit()
+                st.success(f"チーム「{t_name}」を作成しました！\n担当教員を設定しました。")
 
 def render_admin_roles():
     """権限管理 (全体管理者のみ)"""
@@ -721,7 +818,7 @@ def render_admin_signup():
                         st.error(f"DB登録エラー: {e}")
 
 # =========================================================
-# 生徒用: チーム画面 (作成機能復活版)
+# 生徒用: チーム画面
 # =========================================================
 def render_team_page():
     st.title("👥 チーム機能")
@@ -740,8 +837,6 @@ def render_team_page():
         team_data = team_doc.to_dict()
         st.subheader(f"チーム名: {team_data.get('name')}")
         
-        # 招待コード表示（管理者が作ったチームなら表示しない等の制御も可能だが、
-        # 友達を誘えるように表示しておく）
         st.info(f"🔑 **チーム招待コード:** `{team_data.get('teamCode')}`")
         st.caption("友達にこのコードを教えて、チームに招待しよう！")
         
@@ -767,7 +862,6 @@ def render_team_page():
         st.write("チームに参加して、みんなで学習時間を競い合おう！")
         tab_new, tab_join = st.tabs(["✨ 新規チーム作成", "📩 チームに参加"])
         
-        # 生徒によるチーム作成機能 (復活)
         with tab_new:
             with st.form("create_team_form"):
                 t_name = st.text_input("チーム名を決めてください")
@@ -780,7 +874,7 @@ def render_team_page():
                         "members": [user_id],
                         "creatorId": user_id, 
                         "createdAt": firestore.SERVER_TIMESTAMP,
-                        "isOfficial": False # 生徒作成は非公式フラグ
+                        "isOfficial": False 
                     })
                     new_team_id = new_team_ref[1].id
                     user_ref.update({"teamId": new_team_id})
@@ -810,7 +904,7 @@ def render_team_page():
                     else:
                         st.error("チームが見つかりませんでした。")
 
-# ... (他の生徒用ページは変更なし) ...
+# ... (生徒用その他ページ) ...
 def render_contact_page():
     st.title("📮 先生へ連絡")
     st.caption("学習の相談や連絡事項があれば、ここにメッセージを書いてください。")
@@ -1162,6 +1256,7 @@ def render_board_page():
             st.markdown("---")
 
 def render_chat_page():
+    """(3) AIコーチ画面 (写真選択アイコンのUI改善版)"""
     apply_chat_css()
     st.title("🤖 AI数学コーチ")
     st.caption("教科書の内容を「完璧」に理解しよう。答えは教えません、一緒に解きます。")
@@ -1191,16 +1286,24 @@ def render_chat_page():
     4. **アウトプットの要求**: 一方的に解説せず、必ず生徒に考えさせ、返答させてください。
     5. **数式**: 必要であればLaTeX形式（$マーク）を使ってきれいに表示してください。
     """
+    
+    # フォーム定義: ファイル選択とテキスト入力
     with st.form(key="chat_form", clear_on_submit=True):
         col1, col2, col3 = st.columns([0.8, 5, 1], gap="small")
-        with col1: uploaded_file = st.file_uploader(" ", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed", key="chat_uploader")
-        with col2: user_prompt = st.text_area("質問", placeholder="質問を入力...", height=68, label_visibility="collapsed")
+        with col1:
+            # CSSでカメラアイコン化されたアップローダー
+            # label_visibility="collapsed" でデフォルトのラベルを隠す
+            uploaded_file = st.file_uploader("写真を選択", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed", key="chat_uploader")
+        with col2: 
+            user_prompt = st.text_area("質問", placeholder="質問を入力...", height=68, label_visibility="collapsed")
         with col3:
             st.write("") 
             submitted = st.form_submit_button("送信")
+        
         if submitted:
+            # 入力チェック: 画像のみ、テキストのみ、両方OK
             if not user_prompt and not uploaded_file:
-                st.warning("質問か画像を入力してください")
+                st.warning("質問または画像を入力してください")
             elif not GEMINI_API_KEY:
                 st.warning("Gemini APIキーが設定されていません。")
             else:
@@ -1211,6 +1314,7 @@ def render_chat_page():
                         upload_img_obj = Image.open(uploaded_file)
                         user_msg_content += "\n\n(※画像を送信しました)"
                     except Exception: st.error("画像エラー")
+                
                 st.session_state.messages.append({"role": "user", "content": user_msg_content})
                 user_ref.collection("history").add({
                     "role": "user",
@@ -1223,6 +1327,7 @@ def render_chat_page():
                     "timestamp": firestore.SERVER_TIMESTAMP,
                     "log_type": "sequential"
                 })
+                
                 with chat_log_container:
                     with st.chat_message("user"):
                         st.markdown(user_msg_content)
