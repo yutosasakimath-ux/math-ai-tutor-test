@@ -327,7 +327,7 @@ with st.sidebar:
         
         if user_role == "global_admin":
             st.markdown("---")
-            if st.button("👥 チーム作成", use_container_width=True): navigate_to("admin_create_team") # (3)機能追加
+            if st.button("👥 チーム作成", use_container_width=True): navigate_to("admin_create_team") 
             if st.button("🔑 権限管理", use_container_width=True): navigate_to("admin_roles")
             if st.button("👤 アカウント作成", use_container_width=True): navigate_to("admin_signup")
         
@@ -341,7 +341,6 @@ with st.sidebar:
 # ヘルパー関数: 未読チェック
 # =========================================================
 def get_unread_senders(target_team_id=None):
-    """未読メッセージがある生徒のリスト（重複なしID）を返す"""
     try:
         query = db.collection_group("messages").where("sender", "==", "student").where("read", "==", False)
         docs = query.stream()
@@ -419,7 +418,6 @@ def render_admin_learning():
     # --- タブ1: チームコード検索 ---
     with tab_team:
         if role == "team_teacher":
-            # 先生は自分のチーム固定
             st.info(f"担当チーム: {st.session_state.get('managed_team_name', '不明')}")
             team_id = st.session_state.managed_team_id
             t_doc = db.collection("teams").document(team_id).get()
@@ -430,7 +428,6 @@ def render_admin_learning():
                     if u.exists:
                         users_list.append(u.to_dict() | {"id": u.id})
         else:
-            # 全体管理者は入力
             search_team = st.text_input("チームコードを入力", placeholder="例: A1B2C3")
             if search_team:
                 t_query = db.collection("teams").where("teamCode", "==", search_team.strip().upper()).stream()
@@ -449,9 +446,7 @@ def render_admin_learning():
     with tab_student:
         search_name = st.text_input("生徒名を入力", placeholder="例: 山田")
         if search_name:
-            # roleによって検索範囲を変える（先生なら自分のチーム内のみ）
             if role == "team_teacher":
-                # まずチームメンバーを取得し、その中で名前マッチする人をフィルタ
                 team_id = st.session_state.managed_team_id
                 t_doc = db.collection("teams").document(team_id).get()
                 if t_doc.exists:
@@ -463,29 +458,23 @@ def render_admin_learning():
                             if search_name in u_data.get("name", ""):
                                 users_list.append(u_data | {"id": u.id})
             else:
-                # 全体管理者は全検索
                 q = db.collection("users").where("name", ">=", search_name).where("name", "<=", search_name + "\uf8ff").limit(20)
                 docs = q.stream()
                 for d in docs:
                     users_list.append(d.to_dict() | {"id": d.id})
     
-    # 4. 表示
     if not users_list:
         st.caption("検索条件を入力してください、または該当者がいません。")
         return
 
-    # 重複排除 (タブ切り替えなどで混ざるのを防ぐため念のため)
     users_list = {u['id']: u for u in users_list}.values()
     users_list = list(users_list)
     users_list.sort(key=lambda x: x.get("totalStudyMinutes", 0), reverse=True)
     
     st.divider()
-    
-    # 選択UI
     user_options = {u["id"]: f"{u.get('name', '名無し')} ({u.get('totalStudyMinutes', 0)}分)" for u in users_list}
     selected_uid = st.selectbox("詳細を見る生徒を選択", options=list(user_options.keys()), format_func=lambda x: user_options[x], key="learning_select")
     
-    # 詳細表示
     target = next((u for u in users_list if u["id"] == selected_uid), None)
     if target:
         st.markdown(f"#### 👤 {target.get('name')} さんの学習状況")
@@ -502,12 +491,10 @@ def render_admin_contact():
     role = st.session_state.user_role
     target_team = st.session_state.managed_team_id if role == "team_teacher" else None
 
-    # タブ分け
     tab_unread, tab_search = st.tabs(["🔔 未読メッセージ", "🔍 生徒を検索して連絡"])
 
     target_uid_for_chat = None
 
-    # --- タブ1: 未読 ---
     with tab_unread:
         unread_uids = get_unread_senders(target_team)
         if unread_uids:
@@ -521,11 +508,8 @@ def render_admin_contact():
         else:
             st.success("現在、未読のメッセージはありません。")
 
-    # --- タブ2: 検索 ---
     with tab_search:
         st.markdown("チームコードまたは生徒名で検索")
-        
-        # 検索フォーム (学習状況と同じロジックを流用)
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             s_team_code = st.text_input("チームコード", key="contact_search_team")
@@ -533,9 +517,7 @@ def render_admin_contact():
             s_student_name = st.text_input("生徒名", key="contact_search_name")
             
         candidates = []
-        
         if s_team_code:
-            # チーム検索ロジック
             t_query = db.collection("teams").where("teamCode", "==", s_team_code.strip().upper()).stream()
             t_doc = next(t_query, None)
             if t_doc:
@@ -543,16 +525,12 @@ def render_admin_contact():
                 for mid in m_ids:
                     u = db.collection("users").document(mid).get()
                     if u.exists:
-                         # 先生の場合、自分のチームかチェックが必要だが、コードを知っている＝OKとするか厳密にするか。
-                         # ここでは「先生権限なら自分のチーム以外は見れない」フィルタを入れる
                          if role == "team_teacher" and target_team != t_doc.id:
-                             continue # 自分のチームでないならスキップ
+                             continue 
                          candidates.append(u.to_dict() | {"id": u.id})
         
         if s_student_name:
-            # 名前検索ロジック
             if role == "team_teacher":
-                # 自分のチーム内検索
                 t_doc = db.collection("teams").document(target_team).get()
                 if t_doc.exists:
                     m_ids = t_doc.to_dict().get("members", [])
@@ -563,12 +541,10 @@ def render_admin_contact():
                             if s_student_name in u_dat.get("name", ""):
                                 candidates.append(u_dat | {"id": u.id})
             else:
-                # 全体検索
                 q = db.collection("users").where("name", ">=", s_student_name).where("name", "<=", s_student_name + "\uf8ff").limit(20)
                 for d in q.stream():
                     candidates.append(d.to_dict() | {"id": d.id})
 
-        # 重複排除
         unique_candidates = {c['id']: c for c in candidates}.values()
         
         if unique_candidates:
@@ -578,10 +554,8 @@ def render_admin_contact():
                 st.session_state.admin_chat_target = selected
                 st.rerun()
         elif s_team_code or s_student_name:
-            st.caption("該当者が見つかりません（先生の場合は担当チーム外の可能性があります）")
+            st.caption("該当者が見つかりません")
 
-    # --- 共通: チャット画面表示 ---
-    # セッションまたはボタン押下でターゲットが決まっていれば表示
     target_uid_for_chat = st.session_state.get("admin_chat_target")
 
     if target_uid_for_chat:
@@ -596,7 +570,6 @@ def render_admin_contact():
         
         msgs_ref = db.collection("admin_messages").document(target_uid_for_chat).collection("messages")
         
-        # 既読処理
         unread_msgs = msgs_ref.where("sender", "==", "student").where("read", "==", False).stream()
         batch = db.batch()
         has_unread = False
@@ -606,7 +579,6 @@ def render_admin_contact():
         if has_unread:
             batch.commit()
 
-        # 履歴表示
         all_msgs = msgs_ref.order_by("timestamp").stream()
         with st.container(height=400):
             for m in all_msgs:
@@ -625,7 +597,6 @@ def render_admin_contact():
                         st.write(content)
                         st.caption(f"先生 - {t_str}")
 
-        # 送信フォーム
         with st.form("admin_send_msg_v2", clear_on_submit=True):
             txt = st.text_input("返信を入力")
             if st.form_submit_button("送信"):
@@ -641,26 +612,22 @@ def render_admin_contact():
                     st.rerun()
 
 def render_admin_create_team():
-    """(3)(4) 管理者専用チーム作成機能（メンバー選択機能付き）"""
+    """(3) 管理者専用チーム作成機能（メンバー選択機能付き）"""
     st.title("👥 チーム作成")
     st.caption("新しいクラス（チーム）を作成し、初期メンバーを追加できます。")
     
-    # 権限チェック: 全体管理者のみ
     if st.session_state.user_role != "global_admin":
         st.error("この機能は全体管理者のみ利用可能です。")
         return
 
-    # ステップ1: チーム基本情報
     with st.form("create_team_admin_form"):
         t_name = st.text_input("チーム名（例: 3年B組）")
         
-        # 簡易的なメンバー選択: 全ユーザーから選択 (人数が多い場合は検索UIが必要だが今回はマルチセレクト)
-        # 本来はもっとリッチなUIが必要
-        all_users = db.collection("users").limit(100).stream() # 制限あり
+        # メンバー選択 (上限100件)
+        all_users = db.collection("users").limit(100).stream()
         user_opts = {}
         for u in all_users:
             d = u.to_dict()
-            # 既にroleがstudentの人だけを候補にするなどのフィルタも可能
             label = f"{d.get('name')} ({d.get('email')})"
             user_opts[u.id] = label
             
@@ -671,24 +638,20 @@ def render_admin_create_team():
         if submit and t_name:
             t_code = str(uuid.uuid4())[:6].upper()
             
-            # チーム作成
-            # creatorIdは自分(admin)だが、チーム自体は「管理者が作った公式チーム」扱い
             new_ref = db.collection("teams").add({
                 "name": t_name,
                 "teamCode": t_code,
-                "members": selected_members, # 選択したメンバーIDリスト
+                "members": selected_members, 
                 "creatorId": user_id,
-                "createdAt": firestore.SERVER_TIMESTAMP
+                "createdAt": firestore.SERVER_TIMESTAMP,
+                "isOfficial": True # 管理者作成フラグ
             })
             new_team_id = new_ref[1].id
             
-            # 選択された各ユーザーの teamId も更新してあげる（所属させる）
-            # ※FirestoreのBatch処理推奨だが簡易ループ
             for mid in selected_members:
                 db.collection("users").document(mid).update({"teamId": new_team_id})
                 
             st.success(f"チーム「{t_name}」を作成しました！\n招待コード: {t_code}")
-            # 続けて権限付与画面への誘導などを出しても良い
 
 def render_admin_roles():
     """権限管理 (全体管理者のみ)"""
@@ -757,15 +720,16 @@ def render_admin_signup():
                     except Exception as e:
                         st.error(f"DB登録エラー: {e}")
 
-# ... (生徒用ページはそのまま維持。ただしチーム作成機能は生徒から削除/無効化が必要) ...
-
+# =========================================================
+# 生徒用: チーム画面 (作成機能復活版)
+# =========================================================
 def render_team_page():
-    """生徒用チーム画面（(4)変更: 作成機能削除、参加のみ）"""
     st.title("👥 チーム機能")
     my_doc = user_ref.get().to_dict()
     my_team_id = my_doc.get("teamId")
     
     if my_team_id:
+        # 所属済みの場合
         team_ref = db.collection("teams").document(my_team_id)
         team_doc = team_ref.get()
         if not team_doc.exists:
@@ -775,8 +739,11 @@ def render_team_page():
             return
         team_data = team_doc.to_dict()
         st.subheader(f"チーム名: {team_data.get('name')}")
-        # 生徒にはコードを表示しない、または表示するだけ（招待権限による）
-        st.info(f"チームに参加中") 
+        
+        # 招待コード表示（管理者が作ったチームなら表示しない等の制御も可能だが、
+        # 友達を誘えるように表示しておく）
+        st.info(f"🔑 **チーム招待コード:** `{team_data.get('teamCode')}`")
+        st.caption("友達にこのコードを教えて、チームに招待しよう！")
         
         st.markdown("### 📋 メンバーリスト")
         members = team_data.get("members", [])
@@ -796,34 +763,52 @@ def render_team_page():
             st.success("脱退しました。")
             st.rerun()
     else:
-        # チーム未所属時: 参加のみ可能にする（作成タブを削除）
-        st.write("管理者または先生から共有された招待コードを入力して、チームに参加してください。")
+        # 未所属時: 参加または作成
+        st.write("チームに参加して、みんなで学習時間を競い合おう！")
+        tab_new, tab_join = st.tabs(["✨ 新規チーム作成", "📩 チームに参加"])
         
-        with st.form("join_team_form_only"):
-            input_code = st.text_input("招待コードを入力")
-            submit_join = st.form_submit_button("参加する")
-            if submit_join and input_code:
-                input_code = input_code.strip().upper()
-                teams = db.collection("teams").where("teamCode", "==", input_code).stream()
-                target_team = next(teams, None)
-                if target_team:
-                    t_id = target_team.id
-                    members = target_team.to_dict().get("members", [])
-                    if user_id in members:
-                            st.warning("既に参加しています")
+        # 生徒によるチーム作成機能 (復活)
+        with tab_new:
+            with st.form("create_team_form"):
+                t_name = st.text_input("チーム名を決めてください")
+                submit_create = st.form_submit_button("作成して参加")
+                if submit_create and t_name:
+                    t_code = str(uuid.uuid4())[:6].upper()
+                    new_team_ref = db.collection("teams").add({
+                        "name": t_name,
+                        "teamCode": t_code,
+                        "members": [user_id],
+                        "creatorId": user_id, 
+                        "createdAt": firestore.SERVER_TIMESTAMP,
+                        "isOfficial": False # 生徒作成は非公式フラグ
+                    })
+                    new_team_id = new_team_ref[1].id
+                    user_ref.update({"teamId": new_team_id})
+                    st.success(f"チーム「{t_name}」を作成しました！")
+                    st.rerun()
+        
+        with tab_join:
+            with st.form("join_team_form"):
+                input_code = st.text_input("招待コードを入力")
+                submit_join = st.form_submit_button("参加する")
+                if submit_join and input_code:
+                    input_code = input_code.strip().upper()
+                    teams = db.collection("teams").where("teamCode", "==", input_code).stream()
+                    target_team = next(teams, None)
+                    if target_team:
+                        t_id = target_team.id
+                        members = target_team.to_dict().get("members", [])
+                        if user_id in members:
+                             st.warning("既に参加しています")
+                        else:
+                            db.collection("teams").document(t_id).update({
+                                "members": firestore.ArrayUnion([user_id])
+                            })
+                            user_ref.update({"teamId": t_id})
+                            st.success(f"チーム「{target_team.to_dict().get('name')}」に参加しました！")
+                            st.rerun()
                     else:
-                        db.collection("teams").document(t_id).update({
-                            "members": firestore.ArrayUnion([user_id])
-                        })
-                        user_ref.update({"teamId": t_id})
-                        st.success(f"チーム「{target_team.to_dict().get('name')}」に参加しました！")
-                        st.rerun()
-                else:
-                    st.error("チームが見つかりませんでした。")
-        
-        # (4) グループ作成機能（生徒・教員がチーム内でサブグループを作る機能）は
-        # 実装が複雑になるため、今回は「チーム参加」機能に絞っています。
-        # 必要であれば「チーム内グループ」コレクションを別途設計する必要があります。
+                        st.error("チームが見つかりませんでした。")
 
 # ... (他の生徒用ページは変更なし) ...
 def render_contact_page():
@@ -1327,7 +1312,7 @@ elif user_role in ["global_admin", "team_teacher"]:
     elif current_page == "admin_learning": render_admin_learning()
     elif current_page == "admin_contact": render_admin_contact()
     elif current_page == "admin_roles": render_admin_roles()
-    elif current_page == "admin_create_team": render_admin_create_team() # 機能追加
+    elif current_page == "admin_create_team": render_admin_create_team() 
     elif current_page == "admin_signup": render_admin_signup()
     else: render_admin_home()
 else:
