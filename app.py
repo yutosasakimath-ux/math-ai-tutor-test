@@ -285,47 +285,48 @@ def navigate_to(page_name):
 
 # --- 4. UI: ログイン画面 ---
 if st.session_state.user_info is None:
-    st.title("🎓 AI数学コーチ：ログイン")
+    st.title("🎓 AI数学コーチ：入室画面")
     
     if not FIREBASE_WEB_API_KEY:
         st.error("⚠️ Web APIキーが設定されていません。Streamlit Secretsを確認してください。")
         st.stop()
 
-    tab_student, tab_admin = st.tabs(["🧑‍🎓 生徒ログイン", "🛡️ 管理者ログイン"])
+    tab_student, tab_admin = st.tabs(["🧑‍🎓 生徒入室", "🛡️ 管理者入室"])
 
     with tab_student:
-        st.caption("生徒のみなさんはこちらからログインしてください。")
+        st.caption("生徒のみなさんはこちらから入室してください。")
         with st.form("student_login_form"):
             email = st.text_input("メールアドレス", key="s_email")
             password = st.text_input("パスワード", type="password", key="s_pass")
-            submit = st.form_submit_button("ログイン (学習開始)")
+            submit = st.form_submit_button("入室する")
             
             if submit:
                 resp = sign_in_with_email(email, password)
                 if "error" in resp:
-                    st.error(f"ログイン失敗: {resp['error']['message']}")
+                    st.error(f"入室失敗: {resp['error']['message']}")
                 else:
                     uid = resp["localId"]
                     st.session_state.user_info = {"uid": uid, "email": resp["email"]}
                     st.session_state.user_role = "student"
                     
-                    # --- ★ログイン＝入室処理 ---
-                    try:
-                        u_ref = db.collection("users").document(uid)
-                        # 既存のactiveログがないか確認
-                        active_logs = u_ref.collection("attendance_logs")\
-                                           .where("status", "==", "active")\
-                                           .limit(1).stream()
-                        if not next(active_logs, None):
-                            u_ref.collection("attendance_logs").add({
-                                "entry_timestamp": firestore.SERVER_TIMESTAMP,
-                                "status": "active",
-                                "note": "ログインによる自動入室"
-                            })
-                    except Exception as e:
-                        print(f"Login entry record error: {e}")
+                    # --- ★入室記録（管理者以外のみ） ---
+                    if st.session_state.user_role != "global_admin":
+                        try:
+                            u_ref = db.collection("users").document(uid)
+                            # 既存のactiveログがないか確認
+                            active_logs = u_ref.collection("attendance_logs")\
+                                            .where("status", "==", "active")\
+                                            .limit(1).stream()
+                            if not next(active_logs, None):
+                                u_ref.collection("attendance_logs").add({
+                                    "entry_timestamp": firestore.SERVER_TIMESTAMP,
+                                    "status": "active",
+                                    "note": "ログインによる自動入室"
+                                })
+                        except Exception as e:
+                            print(f"Login entry record error: {e}")
 
-                    st.success("ログインしました！入室時間を記録しました。")
+                    st.success("入室しました！")
                     time.sleep(0.5)
                     st.rerun()
 
@@ -338,7 +339,7 @@ if st.session_state.user_info is None:
             st.markdown("---")
             auth_code = st.text_input("管理者パスワード", type="password", help="管理者キーを入力してください。")
             
-            submit_admin = st.form_submit_button("管理者としてログイン")
+            submit_admin = st.form_submit_button("管理者として入室")
             
             if submit_admin:
                 resp = sign_in_with_email(a_email, a_password)
@@ -407,7 +408,7 @@ with st.sidebar:
         if st.button("🏆 ランキング", use_container_width=True, key="sb_ranking"):
             navigate_to("ranking")
     with col_nav2:
-        if st.button("📝 学習記録", use_container_width=True, key="sb_study_log"):
+        if st.button("📝 入退室履歴", use_container_width=True, key="sb_study_log"):
             navigate_to("study_log")
         if st.button("👥 チーム", use_container_width=True, key="sb_team"):
             navigate_to("team")
@@ -425,7 +426,6 @@ with st.sidebar:
     st.markdown("---")
 
     # AIコーチ画面の場合のみ「会話履歴削除」を表示
-    # ★要件変更: スマートアーカイブ機能の実装 + モデル変更(2.0-flash-exp)
     if st.session_state.current_page == "chat":
         if st.button("🗑️ 会話履歴を全削除", key="sb_clear_history"):
             with st.spinner("会話内容を要約してアーカイブ保存しています..."):
@@ -454,12 +454,11 @@ with st.sidebar:
                             batch = db.batch()
                             doc_count = 0
                     
-                    # 2. Geminiでタイトル生成（Gemini 2.0 Flash Exp推奨）
+                    # 2. Geminiでタイトル生成
                     archive_title = datetime.datetime.now(JST).strftime('%Y/%m/%d の学習') # デフォルト
                     if full_text_for_summary and GEMINI_API_KEY:
                         try:
                             genai.configure(api_key=GEMINI_API_KEY)
-                            # ユーザー指定: 番号2番台のflashモデル
                             try:
                                 model_flash = genai.GenerativeModel("gemini-2.0-flash-exp")
                             except:
@@ -503,55 +502,54 @@ with st.sidebar:
                 st.rerun()
         st.markdown("---")
 
-    if st.button("ログアウト (退室)", use_container_width=True, key="sb_logout"):
-        # --- ★ログアウト＝退室処理 ---
-        try:
-            # 最新のactiveなログを取得してクローズ
-            active_logs = user_ref.collection("attendance_logs")\
-                                .where("status", "==", "active")\
-                                .limit(1).stream()
-            current_active_log = next(active_logs, None)
-            
-            if current_active_log:
-                log_id = current_active_log.id
-                data = current_active_log.to_dict()
-                entry_ts = data.get("entry_timestamp")
+    if st.button("退室する", use_container_width=True, key="sb_logout"):
+        # --- ★退室処理（管理者以外のみ時間記録） ---
+        if user_role != "global_admin":
+            try:
+                # 最新のactiveなログを取得してクローズ
+                active_logs = user_ref.collection("attendance_logs")\
+                                    .where("status", "==", "active")\
+                                    .limit(1).stream()
+                current_active_log = next(active_logs, None)
                 
-                if entry_ts:
-                    entry_dt = entry_ts.astimezone(JST)
-                    exit_dt = datetime.datetime.now(JST)
-                    duration = int((exit_dt - entry_dt).total_seconds() // 60)
-                    if duration < 1: duration = 1
+                if current_active_log:
+                    log_id = current_active_log.id
+                    data = current_active_log.to_dict()
+                    entry_ts = data.get("entry_timestamp")
                     
-                    batch = db.batch()
-                    
-                    # 1. Attendance Log Close
-                    batch.update(user_ref.collection("attendance_logs").document(log_id), {
-                        "exit_timestamp": firestore.SERVER_TIMESTAMP,
-                        "duration_minutes": duration,
-                        "status": "completed"
-                    })
-                    
-                    # 2. Total Study Minutes Update
-                    batch.update(user_ref, {
-                        "totalStudyMinutes": firestore.Increment(duration)
-                    })
-                    
-                    # 3. Study Log (バックグラウンド記録 - ランキング集計整合性のため)
-                    # ユーザー要望により「内容は別」とのことだが、時間はランキング計算上必要。
-                    # noteに"自動計測"と入れ、UI側でこれをフィルタリングするか、別タブで見せる。
-                    new_log_ref = user_ref.collection("study_logs").document()
-                    batch.set(new_log_ref, {
-                        "minutes": duration,
-                        "date": exit_dt.strftime('%Y-%m-%d'),
-                        "timestamp": firestore.SERVER_TIMESTAMP,
-                        "note": "自動計測ログ(システム用)" # ユーザーには見せない想定、あるいは明確に区別
-                    })
-                    
-                    batch.commit()
-                    
-        except Exception as e:
-            print(f"Logout exit record error: {e}")
+                    if entry_ts:
+                        entry_dt = entry_ts.astimezone(JST)
+                        exit_dt = datetime.datetime.now(JST)
+                        duration = int((exit_dt - entry_dt).total_seconds() // 60)
+                        if duration < 1: duration = 1
+                        
+                        batch = db.batch()
+                        
+                        # 1. Attendance Log Close
+                        batch.update(user_ref.collection("attendance_logs").document(log_id), {
+                            "exit_timestamp": firestore.SERVER_TIMESTAMP,
+                            "duration_minutes": duration,
+                            "status": "completed"
+                        })
+                        
+                        # 2. Total Study Minutes Update
+                        batch.update(user_ref, {
+                            "totalStudyMinutes": firestore.Increment(duration)
+                        })
+                        
+                        # 3. Study Log (バックグラウンド記録 - ランキング集計用)
+                        new_log_ref = user_ref.collection("study_logs").document()
+                        batch.set(new_log_ref, {
+                            "minutes": duration,
+                            "date": exit_dt.strftime('%Y-%m-%d'),
+                            "timestamp": firestore.SERVER_TIMESTAMP,
+                            "note": "自動計測ログ(システム用)"
+                        })
+                        
+                        batch.commit()
+                        
+            except Exception as e:
+                print(f"Logout exit record error: {e}")
 
         # セッションクリア
         st.session_state.user_info = None
@@ -579,7 +577,7 @@ def render_admin_menu_page():
         return
 
     st.title("🛠 システム管理者メニュー")
-    st.info(f"ログイン中: {st.session_state.user_info.get('email')}")
+    st.info(f"入室中: {st.session_state.user_info.get('email')}")
 
     # 機能ごとにタブで整理
     tab1, tab2, tab3 = st.tabs(["📊 ダッシュボード", "👤 ユーザー管理", "⚙️ システム設定"])
@@ -723,25 +721,25 @@ def render_portal_page():
     st.info(f"📚 **累計学習時間**: {total_hours}時間 {total_minutes % 60}分")
 
     # --- ★入退室（学習タイマー）ロジック ---
-    # 削除: 入退室ボタン、経過時間表示はログイン・ログアウトに統合されたため削除
     # 放置対策チェックのみ実施
     
-    active_logs = user_ref.collection("attendance_logs")\
-                          .where("status", "==", "active")\
-                          .limit(1).stream()
-    current_active_log = next(active_logs, None)
+    if st.session_state.user_role != "global_admin":
+        active_logs = user_ref.collection("attendance_logs")\
+                            .where("status", "==", "active")\
+                            .limit(1).stream()
+        current_active_log = next(active_logs, None)
+        
+        if current_active_log:
+            data = current_active_log.to_dict()
+            entry_ts = data.get("entry_timestamp")
+            if entry_ts:
+                entry_dt = entry_ts.astimezone(JST)
+                now_dt = datetime.datetime.now(JST)
+                diff = now_dt - entry_dt
+                if diff.total_seconds() > 86400: # 24時間
+                    st.warning("⚠️ 前回の退室記録が正しく行われていません。24時間以上経過したため、アラートを表示しています。")
     
-    if current_active_log:
-        data = current_active_log.to_dict()
-        entry_ts = data.get("entry_timestamp")
-        if entry_ts:
-            entry_dt = entry_ts.astimezone(JST)
-            now_dt = datetime.datetime.now(JST)
-            diff = now_dt - entry_dt
-            if diff.total_seconds() > 86400: # 24時間
-                st.warning("⚠️ 前回の退室記録が正しく行われていません。24時間以上経過したため、アラートを表示しています。")
-    
-    st.markdown("現在、**ログイン中（学習中）**として時間を計測しています。終了する際はサイドバーの「ログアウト」を押してください。")
+    st.markdown("現在、**入室中（学習中）**として時間を計測しています。終了する際はサイドバーの「退室する」を押してください。")
     st.markdown("---")
 
     # メインナビゲーション
@@ -755,7 +753,7 @@ def render_portal_page():
             navigate_to("board")
             
     with col2:
-        if st.button("📝 学習記録\n(履歴・復習)", use_container_width=True):
+        if st.button("📝 入退室履歴\n(履歴・復習)", use_container_width=True):
             navigate_to("study_log")
         if st.button("👥 チーム\n(みんなで頑張る)", use_container_width=True):
             navigate_to("team")
@@ -844,93 +842,51 @@ def render_portal_page():
                      st.error("パスワードが違います")
 
 def render_study_log_page():
-    """学習記録画面（構成変更：入退室履歴・学習メモ・アーカイブ）"""
-    st.title("📝 学習記録 & アーカイブ")
+    """学習記録画面（修正：エラー回避のためクエリ修正、学習メモ機能削除）"""
+    st.title("📝 入退室履歴 & アーカイブ")
     
-    # タブ構成を変更
-    tab_attendance, tab_notes, tab_archive = st.tabs(["⏱️ 入退室履歴", "📓 学習メモ (内容)", "🗄️ 過去の復習 (アーカイブ)"])
+    # タブ構成を変更（学習メモを削除）
+    tab_attendance, tab_archive = st.tabs(["⏱️ 入退室履歴", "🗄️ 過去の復習 (アーカイブ)"])
     
     # --- Tab 1: 入退室履歴 (Attendance Logs) ---
     with tab_attendance:
-        st.write("ログイン(入室)・ログアウト(退室)の記録です。")
-        att_logs_stream = user_ref.collection("attendance_logs")\
-                                  .where("status", "==", "completed")\
-                                  .order_by("entry_timestamp", direction=firestore.Query.DESCENDING)\
-                                  .limit(20).stream()
+        st.write("入室・退室の記録です。")
         
-        att_data_list = []
-        for doc in att_logs_stream:
-            d = doc.to_dict()
-            entry_ts = d.get("entry_timestamp")
-            exit_ts = d.get("exit_timestamp")
-            duration = d.get("duration_minutes", 0)
+        # ★修正：複合インデックスエラーを回避するため、まず日付順で取得し、メモリ上でstatusをフィルタリングする
+        try:
+            att_logs_stream = user_ref.collection("attendance_logs")\
+                                    .order_by("entry_timestamp", direction=firestore.Query.DESCENDING)\
+                                    .limit(50).stream()
             
-            entry_str = entry_ts.astimezone(JST).strftime('%Y/%m/%d %H:%M') if entry_ts else "-"
-            exit_str = exit_ts.astimezone(JST).strftime('%H:%M') if exit_ts else "-"
-            
-            att_data_list.append({
-                "日付": entry_str.split(" ")[0],
-                "開始": entry_str.split(" ")[1],
-                "終了": exit_str,
-                "学習時間": f"{duration}分"
-            })
-            
-        if att_data_list:
-            st.table(pd.DataFrame(att_data_list))
-        else:
-            st.info("まだ履歴がありません")
+            att_data_list = []
+            for doc in att_logs_stream:
+                d = doc.to_dict()
+                # 完了したもののみ表示
+                if d.get("status") != "completed":
+                    continue
+                    
+                entry_ts = d.get("entry_timestamp")
+                exit_ts = d.get("exit_timestamp")
+                duration = d.get("duration_minutes", 0)
+                
+                entry_str = entry_ts.astimezone(JST).strftime('%Y/%m/%d %H:%M') if entry_ts else "-"
+                exit_str = exit_ts.astimezone(JST).strftime('%H:%M') if exit_ts else "-"
+                
+                att_data_list.append({
+                    "日付": entry_str.split(" ")[0],
+                    "開始": entry_str.split(" ")[1],
+                    "終了": exit_str,
+                    "学習時間": f"{duration}分"
+                })
+                
+            if att_data_list:
+                st.table(pd.DataFrame(att_data_list))
+            else:
+                st.info("まだ履歴がありません")
+        except Exception as e:
+            st.error(f"履歴の取得に失敗しました: {e}")
 
-    # --- Tab 2: 学習メモ (Study Notes) ---
-    with tab_notes:
-        st.write("学習した内容を自由にメモしましょう。（時間は自動計測されるため、ここでは内容の記録がメインです）")
-        
-        with st.form("study_note_form"):
-            note = st.text_area("今日の学習内容・気づき・感想", placeholder="例: ベクトルの内積の計算練習をした。公式の使い方がわかった。")
-            submit = st.form_submit_button("メモを保存")
-            
-            if submit and note:
-                # 時間は0として記録（ランキング集計には影響させない、またはnoteのみのレコードとする）
-                now_jst = datetime.datetime.now(JST)
-                date_str = now_jst.strftime('%Y-%m-%d')
-                try:
-                    user_ref.collection("study_logs").add({
-                        "minutes": 0, # 時間は含めない
-                        "date": date_str,
-                        "timestamp": firestore.SERVER_TIMESTAMP,
-                        "note": note,
-                        "type": "manual_note"
-                    })
-                    st.success("メモを保存しました！")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"保存エラー: {e}")
-        
-        st.markdown("---")
-        st.write("📝 過去のメモ")
-        # メモのみ（もしくは手動記録）を表示
-        logs_stream = user_ref.collection("study_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(20).stream()
-        
-        for log in logs_stream:
-            data = log.to_dict()
-            # 自動計測ログ(note="自動計測ログ(システム用)")は隠す
-            if data.get("note") == "自動計測ログ(システム用)":
-                continue
-
-            doc_id = log.id
-            ts = data.get("timestamp")
-            date_display = ts.astimezone(JST).strftime('%Y/%m/%d %H:%M') if ts else data.get("date")
-            note_content = data.get('note', '')
-            
-            with st.expander(f"{date_display} : {note_content[:15]}..."):
-                 st.write(note_content)
-                 if st.button("削除", key=f"del_note_{doc_id}"):
-                     user_ref.collection("study_logs").document(doc_id).delete()
-                     st.success("削除しました")
-                     time.sleep(0.5)
-                     st.rerun()
-
-    # --- Tab 3: アーカイブ (Archives) ---
+    # --- Tab 2: アーカイブ (Archives) ---
     with tab_archive:
         st.write("AIコーチとの過去の会話（アーカイブ）を閲覧できます。")
         
