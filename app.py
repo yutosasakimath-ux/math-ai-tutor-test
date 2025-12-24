@@ -363,9 +363,10 @@ if st.session_state.user_info is None:
                         st.error("⛔️ 認証に失敗しました。（管理者パスワードが違います）")
                     
                     if login_success:
-                        st.info("※管理者メニューへ移動します")
+                        # ★変更：管理者もホーム（ポータル）へ遷移する仕様へ変更
+                        st.info("※ポータルへ移動します")
                         time.sleep(0.5)
-                        navigate_to("admin_menu")
+                        navigate_to("portal")
     st.stop()
 
 # =========================================================
@@ -584,8 +585,8 @@ def render_admin_menu_page():
     st.title("🛠 システム管理者メニュー")
     st.info(f"入室中: {st.session_state.user_info.get('email')}")
 
-    # 機能ごとにタブで整理
-    tab1, tab2, tab3 = st.tabs(["📊 ダッシュボード", "👤 ユーザー管理", "⚙️ システム設定"])
+    # ★変更：学習ログ閲覧タブを追加
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 ダッシュボード", "👤 ユーザー管理", "⚙️ システム設定", "🗄️ 生徒学習ログ"])
 
     # --- タブ1: ダッシュボード (コスト・ログ) ---
     with tab1:
@@ -707,6 +708,70 @@ def render_admin_menu_page():
         st.markdown("#### 📝 学習まとめレポート作成 (デバッグ用)")
         if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen_tab"):
             st.info("※チャット画面のデバッグメニューと同じロジックがここに実装されます（今回は省略）")
+            
+    # --- タブ4: 生徒学習ログ閲覧 (追加機能) ---
+    with tab4:
+        st.subheader("🗄️ 生徒学習アーカイブ閲覧")
+        st.caption("生徒の過去の学習記録（アーカイブ）を確認できます。")
+        
+        # 1. ユーザー選択
+        try:
+            # ユーザー一覧取得 (人数が多い場合はページネーション検討が必要だが今回は全件取得)
+            all_users_stream = db.collection("users").stream()
+            user_options = {}
+            for doc in all_users_stream:
+                u_data = doc.to_dict()
+                u_name = u_data.get("name", "名称未設定")
+                u_email = u_data.get("email", "")
+                label = f"{u_name} ({u_email})"
+                user_options[label] = doc.id
+            
+            if not user_options:
+                st.warning("ユーザーが見つかりません。")
+            else:
+                selected_user_label = st.selectbox("生徒を選択", list(user_options.keys()))
+                target_uid = user_options[selected_user_label]
+                
+                if target_uid:
+                    st.markdown("---")
+                    # 2. アーカイブ選択
+                    target_ref = db.collection("users").document(target_uid)
+                    archives_stream = target_ref.collection("archived_sessions")\
+                                            .order_by("archived_at", direction=firestore.Query.DESCENDING)\
+                                            .limit(20).stream()
+                    
+                    archives_list = list(archives_stream)
+                    
+                    if not archives_list:
+                        st.info(f"{selected_user_label} さんのアーカイブはありません。")
+                    else:
+                        archive_opts = {}
+                        for a_doc in archives_list:
+                            a_data = a_doc.to_dict()
+                            ts = a_data.get("archived_at")
+                            date_str = ts.astimezone(JST).strftime('%m/%d %H:%M') if ts else "日時不明"
+                            title = a_data.get("title", "無題")
+                            a_label = f"{date_str} : {title}"
+                            archive_opts[a_label] = a_data.get("messages", [])
+                        
+                        selected_archive = st.selectbox("閲覧するアーカイブを選択", list(archive_opts.keys()))
+                        
+                        if selected_archive:
+                            st.success(f"表示中: {selected_archive}")
+                            messages = archive_opts[selected_archive]
+                            
+                            # 3. チャットログ表示
+                            with st.container():
+                                for msg in messages:
+                                    role = msg.get("role")
+                                    content = msg.get("content")
+                                    if isinstance(content, dict):
+                                            content = content.get("text", "")
+                                    
+                                    with st.chat_message(role):
+                                        st.markdown(content)
+        except Exception as e:
+            st.error(f"データ取得エラー: {e}")
 
     st.markdown("---")
     if st.button("← ポータルへ戻る"):
@@ -743,8 +808,14 @@ def render_portal_page():
                 diff = now_dt - entry_dt
                 if diff.total_seconds() > 86400: # 24時間
                     st.warning("⚠️ 前回の退室記録が正しく行われていません。24時間以上経過したため、アラートを表示しています。")
+        
+        # 通常生徒用の表示
+        st.markdown("現在、**入室中（学習中）**として時間を計測しています。終了する際はサイドバーの「退室する」を押してください。")
+    else:
+        # ★変更：管理者入室時の表示変更
+        st.success("🛡️ **管理者モードで入室中**")
+        st.caption("※管理者のため、学習時間の計測は行われません。")
     
-    st.markdown("現在、**入室中（学習中）**として時間を計測しています。終了する際はサイドバーの「退室する」を押してください。")
     st.markdown("---")
 
     # メインナビゲーション
