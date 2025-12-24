@@ -401,29 +401,19 @@ with st.sidebar:
     if st.button("🏠 ホーム (ポータル)", use_container_width=True, key="sb_home"):
         navigate_to("portal")
     
-    col_nav1, col_nav2 = st.columns(2)
-    with col_nav1:
-        if st.button("🤖 AIコーチ", use_container_width=True, key="sb_chat"):
-            navigate_to("chat")
-        if st.button("🏆 ランキング", use_container_width=True, key="sb_ranking"):
-            navigate_to("ranking")
-    with col_nav2:
-        # ★分割：入退室履歴
-        if st.button("📝 入退室履歴", use_container_width=True, key="sb_study_log"):
-            navigate_to("study_log")
-        # ★分割：過去の復習
-        if st.button("🗄️ 過去の復習", use_container_width=True, key="sb_archive"):
-            navigate_to("archive")
-            
+    # ★変更：カラム分け（st.columns）を廃止し、すべて縦一列に配置
+    if st.button("🤖 AIコーチ", use_container_width=True, key="sb_chat"):
+        navigate_to("chat")
+    if st.button("🏆 ランキング", use_container_width=True, key="sb_ranking"):
+        navigate_to("ranking")
+    if st.button("📝 入退室履歴", use_container_width=True, key="sb_study_log"):
+        navigate_to("study_log")
+    if st.button("🗄️ 過去の復習", use_container_width=True, key="sb_archive"):
+        navigate_to("archive")
     if st.button("👥 チーム", use_container_width=True, key="sb_team"):
-            navigate_to("team")
-    
+        navigate_to("team")
     if st.button("💬 掲示板", use_container_width=True, key="sb_board"):
-            navigate_to("board")
-
-    # ★管理者専用メニューボタンはサイドバーから削除（ポータルへ移行）
-    # if user_role == "global_admin":
-    #    ...
+        navigate_to("board")
     
     st.markdown("---")
 
