@@ -704,10 +704,10 @@ def render_admin_tools_page():
         if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen"):
             st.info("※チャット画面のデバッグメニューと同じロジックがここに実装されます（今回は省略）")
             
-    # --- 機能4: 生徒学習ログ閲覧 ---
+    # --- 機能4: 生徒学習ログ閲覧 (★修正: History閲覧機能追加) ---
     elif current == "admin_student_logs":
-        st.subheader("🗄️ 生徒学習アーカイブ閲覧")
-        st.caption("生徒の過去の学習記録（アーカイブ）を確認できます。")
+        st.subheader("🗄️ 生徒学習ログ閲覧")
+        st.caption("生徒の過去の学習記録（アーカイブ）および現在進行中の会話（History）を確認できます。")
         
         try:
             # ユーザー一覧取得
@@ -728,31 +728,25 @@ def render_admin_tools_page():
                 
                 if target_uid:
                     st.markdown("---")
+                    
+                    # ★変更: ログ種類の選択を追加
+                    log_type = st.radio("ログの種類を選択", 
+                                        ["🗄️ 過去のアーカイブ (保存済み)", "💬 現在進行中の会話 (History)"],
+                                        horizontal=True)
+                    
                     target_ref = db.collection("users").document(target_uid)
-                    archives_stream = target_ref.collection("archived_sessions")\
-                                            .order_by("archived_at", direction=firestore.Query.DESCENDING)\
-                                            .limit(20).stream()
                     
-                    archives_list = list(archives_stream)
-                    
-                    if not archives_list:
-                        st.info(f"{selected_user_label} さんのアーカイブはありません。")
-                    else:
-                        archive_opts = {}
-                        for a_doc in archives_list:
-                            a_data = a_doc.to_dict()
-                            ts = a_data.get("archived_at")
-                            date_str = ts.astimezone(JST).strftime('%m/%d %H:%M') if ts else "日時不明"
-                            title = a_data.get("title", "無題")
-                            a_label = f"{date_str} : {title}"
-                            archive_opts[a_label] = a_data.get("messages", [])
+                    if "現在進行中" in log_type:
+                        # --- 現在進行中のログ (History) ---
+                        st.info("現在進行中（アーカイブ前）の直近の会話履歴を表示します。")
+                        history_stream = target_ref.collection("history")\
+                                                   .order_by("timestamp")\
+                                                   .limit(50).stream()
+                        messages = [doc.to_dict() for doc in history_stream]
                         
-                        selected_archive = st.selectbox("閲覧するアーカイブを選択", list(archive_opts.keys()))
-                        
-                        if selected_archive:
-                            st.success(f"表示中: {selected_archive}")
-                            messages = archive_opts[selected_archive]
-                            
+                        if not messages:
+                            st.info("現在進行中の会話履歴はありません。")
+                        else:
                             with st.container():
                                 for msg in messages:
                                     role = msg.get("role")
@@ -762,6 +756,41 @@ def render_admin_tools_page():
                                     
                                     with st.chat_message(role):
                                         st.markdown(content)
+                    else:
+                        # --- アーカイブ済みログ ---
+                        archives_stream = target_ref.collection("archived_sessions")\
+                                                .order_by("archived_at", direction=firestore.Query.DESCENDING)\
+                                                .limit(20).stream()
+                        
+                        archives_list = list(archives_stream)
+                        
+                        if not archives_list:
+                            st.info(f"{selected_user_label} さんのアーカイブはありません。")
+                        else:
+                            archive_opts = {}
+                            for a_doc in archives_list:
+                                a_data = a_doc.to_dict()
+                                ts = a_data.get("archived_at")
+                                date_str = ts.astimezone(JST).strftime('%m/%d %H:%M') if ts else "日時不明"
+                                title = a_data.get("title", "無題")
+                                a_label = f"{date_str} : {title}"
+                                archive_opts[a_label] = a_data.get("messages", [])
+                            
+                            selected_archive = st.selectbox("閲覧するアーカイブを選択", list(archive_opts.keys()))
+                            
+                            if selected_archive:
+                                st.success(f"表示中: {selected_archive}")
+                                messages = archive_opts[selected_archive]
+                                
+                                with st.container():
+                                    for msg in messages:
+                                        role = msg.get("role")
+                                        content = msg.get("content")
+                                        if isinstance(content, dict):
+                                                content = content.get("text", "")
+                                        
+                                        with st.chat_message(role):
+                                            st.markdown(content)
         except Exception as e:
             st.error(f"データ取得エラー: {e}")
 
@@ -794,6 +823,80 @@ def render_admin_tools_page():
                 
         except Exception as e:
             st.error(f"フィードバック取得エラー: {e}")
+
+    st.markdown("---")
+    if st.button("← ポータルへ戻る"):
+        navigate_to("portal")
+
+# --- ★追加: 設定画面 (独立ページ) ---
+def render_settings_page():
+    st.title("⚙️ 設定")
+    
+    # ユーザー情報の取得
+    try:
+        user_doc_obj = user_ref.get()
+        if user_doc_obj.exists:
+            user_doc = user_doc_obj.to_dict()
+        else:
+            user_doc = {}
+    except Exception:
+        user_doc = {}
+
+    st.subheader("👤 プロフィール設定")
+    
+    # 名前変更
+    current_name = user_doc.get("name", student_name)
+    new_name = st.text_input("表示名（AIが呼びかける名前）", value=current_name)
+    
+    if st.button("名前を更新する", key="btn_update_name"):
+        if new_name and new_name != current_name:
+            user_ref.update({"name": new_name})
+            st.session_state.user_name = new_name
+            st.success("名前を更新しました！")
+            time.sleep(1)
+            st.rerun()
+        elif new_name == current_name:
+            st.info("変更はありません")
+
+    st.markdown("---")
+    st.subheader("🏆 ランキング設定")
+
+    # ランキング匿名設定
+    current_anon = user_doc.get("isAnonymousRanking", False)
+    if "is_anon_ranking" not in st.session_state:
+        st.session_state.is_anon_ranking = current_anon
+    
+    is_anon = st.checkbox("ランキングで匿名にする", value=st.session_state.is_anon_ranking)
+    
+    if is_anon != st.session_state.is_anon_ranking:
+        user_ref.update({"isAnonymousRanking": is_anon})
+        st.session_state.is_anon_ranking = is_anon
+        st.success("匿名設定を更新しました")
+
+    st.markdown("---")
+    if st.button("← ポータルへ戻る"):
+        navigate_to("portal")
+
+# --- ★追加: 連絡画面 (独立ページ) ---
+def render_contact_page():
+    st.title("📩 運営へ連絡")
+    st.caption("機能の要望、バグ報告、その他ご意見などをお送りください。")
+    
+    with st.form("feedback_form_page", clear_on_submit=True):
+        feedback_content = st.text_area("内容を入力してください", placeholder="例：〇〇の機能が使いにくいです、〇〇機能が欲しいです")
+        feedback_submit = st.form_submit_button("送信する")
+        
+        if feedback_submit:
+            if feedback_content:
+                db.collection("feedback").add({
+                    "user_id": user_id,
+                    "email": user_email,
+                    "content": feedback_content,
+                    "timestamp": firestore.SERVER_TIMESTAMP
+                })
+                st.success("送信しました。貴重なご意見ありがとうございます！")
+            else:
+                st.error("内容を入力してください")
 
     st.markdown("---")
     if st.button("← ポータルへ戻る"):
@@ -874,44 +977,15 @@ def render_portal_page():
     
     st.markdown("---")
     
-    # ★変更：管理者の場合は「設定・サポート」を表示しない
+    # ★変更：設定と連絡用ボタンを独立させ、タブ（エキスパンダー）を削除
     if st.session_state.get("user_role") != "global_admin":
-        with st.expander("⚙️ 設定・サポート"):
-            st.markdown("### 👤 プロフィール設定")
-            
-            # 名前変更
-            new_name = st.text_input("表示名（AIが呼びかける名前）", value=student_name, key="setting_name")
-            if new_name != student_name:
-                if st.button("名前を更新"):
-                    user_ref.update({"name": new_name})
-                    st.session_state.user_name = new_name
-                    st.success("名前を更新しました")
-                    time.sleep(1)
-                    st.rerun()
-            
-            # ランキング匿名設定
-            if "is_anon_ranking" not in st.session_state:
-                st.session_state.is_anon_ranking = user_doc.get("isAnonymousRanking", False)
-            
-            is_anon = st.checkbox("ランキングで匿名にする", value=st.session_state.is_anon_ranking, key="setting_anon")
-            if is_anon != st.session_state.is_anon_ranking:
-                user_ref.update({"isAnonymousRanking": is_anon})
-                st.session_state.is_anon_ranking = is_anon
-                st.success("匿名設定を更新しました")
-                
-            st.markdown("---")
-            st.markdown("### 📢 ご意見・不具合報告")
-            with st.form("feedback_form_portal", clear_on_submit=True):
-                feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の機能が欲しいです")
-                feedback_submit = st.form_submit_button("送信")
-                if feedback_submit and feedback_content:
-                    db.collection("feedback").add({
-                        "user_id": user_id,
-                        "email": user_email,
-                        "content": feedback_content,
-                        "timestamp": firestore.SERVER_TIMESTAMP
-                    })
-                    st.success("送信しました。ありがとうございます！")
+        col_st1, col_st2 = st.columns(2)
+        with col_st1:
+            if st.button("⚙️ 設定", use_container_width=True):
+                navigate_to("settings")
+        with col_st2:
+             if st.button("📩 運営へ連絡", use_container_width=True):
+                navigate_to("contact")
 
 def render_study_log_page():
     """入退室履歴のみを表示するページ（アーカイブは分離）"""
@@ -1573,6 +1647,9 @@ current_page = st.session_state.current_page
 # ★変更：管理者用ページのルーティング分岐を追加
 ADMIN_PAGES = ["admin_dashboard", "admin_users", "admin_settings", "admin_student_logs", "admin_feedback"]
 
+# ★追加：一般ユーザー用設定・連絡ページの分岐を追加
+SETTINGS_PAGES = ["settings", "contact"]
+
 if current_page == "portal":
     render_portal_page()
 elif current_page == "chat":
@@ -1587,7 +1664,11 @@ elif current_page == "board":
     render_board_page()
 elif current_page == "team":
     render_team_page()
-elif current_page in ADMIN_PAGES: # ★変更：管理者用ツールの表示
+elif current_page in ADMIN_PAGES: # 管理者用ツール
     render_admin_tools_page()
+elif current_page == "settings": # ★追加
+    render_settings_page()
+elif current_page == "contact": # ★追加
+    render_contact_page()
 else:
     render_portal_page()
