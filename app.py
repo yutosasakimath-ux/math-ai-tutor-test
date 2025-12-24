@@ -408,9 +408,14 @@ with st.sidebar:
         if st.button("🏆 ランキング", use_container_width=True, key="sb_ranking"):
             navigate_to("ranking")
     with col_nav2:
+        # ★分割：入退室履歴
         if st.button("📝 入退室履歴", use_container_width=True, key="sb_study_log"):
             navigate_to("study_log")
-        if st.button("👥 チーム", use_container_width=True, key="sb_team"):
+        # ★分割：過去の復習
+        if st.button("🗄️ 過去の復習", use_container_width=True, key="sb_archive"):
+            navigate_to("archive")
+            
+    if st.button("👥 チーム", use_container_width=True, key="sb_team"):
             navigate_to("team")
     
     if st.button("💬 掲示板", use_container_width=True, key="sb_board"):
@@ -753,8 +758,12 @@ def render_portal_page():
             navigate_to("board")
             
     with col2:
-        if st.button("📝 入退室履歴\n(履歴・復習)", use_container_width=True):
+        # ★分割：入退室履歴
+        if st.button("📝 入退室履歴\n(履歴確認)", use_container_width=True):
             navigate_to("study_log")
+        # ★分割：過去の復習
+        if st.button("🗄️ 過去の復習\n(アーカイブ)", use_container_width=True):
+            navigate_to("archive")
         if st.button("👥 チーム\n(みんなで頑張る)", use_container_width=True):
             navigate_to("team")
         
@@ -842,90 +851,85 @@ def render_portal_page():
                      st.error("パスワードが違います")
 
 def render_study_log_page():
-    """学習記録画面（修正：エラー回避のためクエリ修正、学習メモ機能削除）"""
-    st.title("📝 入退室履歴 & アーカイブ")
+    """入退室履歴のみを表示するページ（アーカイブは分離）"""
+    st.title("⏱️ 入退室履歴")
+    st.write("入室・退室の記録です。")
     
-    # タブ構成を変更（学習メモを削除）
-    tab_attendance, tab_archive = st.tabs(["⏱️ 入退室履歴", "🗄️ 過去の復習 (アーカイブ)"])
-    
-    # --- Tab 1: 入退室履歴 (Attendance Logs) ---
-    with tab_attendance:
-        st.write("入室・退室の記録です。")
+    # 複合インデックスエラーを回避するため、まず日付順で取得し、メモリ上でstatusをフィルタリングする
+    try:
+        att_logs_stream = user_ref.collection("attendance_logs")\
+                                .order_by("entry_timestamp", direction=firestore.Query.DESCENDING)\
+                                .limit(50).stream()
         
-        # ★修正：複合インデックスエラーを回避するため、まず日付順で取得し、メモリ上でstatusをフィルタリングする
-        try:
-            att_logs_stream = user_ref.collection("attendance_logs")\
-                                    .order_by("entry_timestamp", direction=firestore.Query.DESCENDING)\
-                                    .limit(50).stream()
+        att_data_list = []
+        for doc in att_logs_stream:
+            d = doc.to_dict()
+            # 完了したもののみ表示
+            if d.get("status") != "completed":
+                continue
+                
+            entry_ts = d.get("entry_timestamp")
+            exit_ts = d.get("exit_timestamp")
+            duration = d.get("duration_minutes", 0)
             
-            att_data_list = []
-            for doc in att_logs_stream:
-                d = doc.to_dict()
-                # 完了したもののみ表示
-                if d.get("status") != "completed":
-                    continue
-                    
-                entry_ts = d.get("entry_timestamp")
-                exit_ts = d.get("exit_timestamp")
-                duration = d.get("duration_minutes", 0)
-                
-                entry_str = entry_ts.astimezone(JST).strftime('%Y/%m/%d %H:%M') if entry_ts else "-"
-                exit_str = exit_ts.astimezone(JST).strftime('%H:%M') if exit_ts else "-"
-                
-                att_data_list.append({
-                    "日付": entry_str.split(" ")[0],
-                    "開始": entry_str.split(" ")[1],
-                    "終了": exit_str,
-                    "学習時間": f"{duration}分"
-                })
-                
-            if att_data_list:
-                st.table(pd.DataFrame(att_data_list))
-            else:
-                st.info("まだ履歴がありません")
-        except Exception as e:
-            st.error(f"履歴の取得に失敗しました: {e}")
-
-    # --- Tab 2: アーカイブ (Archives) ---
-    with tab_archive:
-        st.write("AIコーチとの過去の会話（アーカイブ）を閲覧できます。")
-        
-        archives_stream = user_ref.collection("archived_sessions")\
-                                  .order_by("archived_at", direction=firestore.Query.DESCENDING)\
-                                  .limit(20).stream()
-        
-        # アーカイブ選択用UI
-        archives = list(archives_stream)
-        if not archives:
-            st.info("アーカイブされた会話はありません。")
+            entry_str = entry_ts.astimezone(JST).strftime('%Y/%m/%d %H:%M') if entry_ts else "-"
+            exit_str = exit_ts.astimezone(JST).strftime('%H:%M') if exit_ts else "-"
+            
+            att_data_list.append({
+                "日付": entry_str.split(" ")[0],
+                "開始": entry_str.split(" ")[1],
+                "終了": exit_str,
+                "学習時間": f"{duration}分"
+            })
+            
+        if att_data_list:
+            st.table(pd.DataFrame(att_data_list))
         else:
-            archive_options = {}
-            for doc in archives:
-                d = doc.to_dict()
-                ts = d.get("archived_at")
-                date_str = ts.astimezone(JST).strftime('%m/%d %H:%M') if ts else "日時不明"
-                title = d.get("title", "無題のセッション")
-                label = f"{date_str} : {title}"
-                archive_options[label] = d.get("messages", [])
+            st.info("まだ履歴がありません")
+    except Exception as e:
+        st.error(f"履歴の取得に失敗しました: {e}")
+
+def render_archive_page():
+    """過去の復習（アーカイブ）を表示するページ（新規作成）"""
+    st.title("🗄️ 過去の復習 (アーカイブ)")
+    st.write("AIコーチとの過去の会話（アーカイブ）を閲覧できます。")
+    
+    archives_stream = user_ref.collection("archived_sessions")\
+                              .order_by("archived_at", direction=firestore.Query.DESCENDING)\
+                              .limit(20).stream()
+    
+    # アーカイブ選択用UI
+    archives = list(archives_stream)
+    if not archives:
+        st.info("アーカイブされた会話はありません。")
+    else:
+        archive_options = {}
+        for doc in archives:
+            d = doc.to_dict()
+            ts = d.get("archived_at")
+            date_str = ts.astimezone(JST).strftime('%m/%d %H:%M') if ts else "日時不明"
+            title = d.get("title", "無題のセッション")
+            label = f"{date_str} : {title}"
+            archive_options[label] = d.get("messages", [])
+        
+        selected_label = st.selectbox("閲覧したい会話を選択", list(archive_options.keys()))
+        
+        if selected_label:
+            st.markdown("---")
+            st.caption(f"閲覧中: {selected_label}")
+            messages = archive_options[selected_label]
             
-            selected_label = st.selectbox("閲覧したい会話を選択", list(archive_options.keys()))
-            
-            if selected_label:
-                st.markdown("---")
-                st.caption(f"閲覧中: {selected_label}")
-                messages = archive_options[selected_label]
-                
-                # チャットログ再現
-                chat_container = st.container()
-                with chat_container:
-                    for msg in messages:
-                        role = msg.get("role")
-                        content = msg.get("content")
-                        if isinstance(content, dict):
-                             content = content.get("text", "")
-                        
-                        with st.chat_message(role):
-                            st.markdown(content)
+            # チャットログ再現
+            chat_container = st.container()
+            with chat_container:
+                for msg in messages:
+                    role = msg.get("role")
+                    content = msg.get("content")
+                    if isinstance(content, dict):
+                            content = content.get("text", "")
+                    
+                    with st.chat_message(role):
+                        st.markdown(content)
 
 def render_ranking_page():
     """ランキング画面 (修正版: 個人/チーム × 日/週/月 の計6パターン + 1位始まり)"""
@@ -1509,6 +1513,8 @@ elif current_page == "chat":
     render_chat_page()
 elif current_page == "study_log":
     render_study_log_page()
+elif current_page == "archive": # ★新規ルーティング
+    render_archive_page()
 elif current_page == "ranking":
     render_ranking_page()
 elif current_page == "board":
