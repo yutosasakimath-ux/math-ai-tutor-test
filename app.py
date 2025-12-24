@@ -363,7 +363,6 @@ if st.session_state.user_info is None:
                         st.error("⛔️ 認証に失敗しました。（管理者パスワードが違います）")
                     
                     if login_success:
-                        # ★変更：管理者もホーム（ポータル）へ遷移する仕様へ変更
                         st.info("※ポータルへ移動します")
                         time.sleep(0.5)
                         navigate_to("portal")
@@ -585,8 +584,8 @@ def render_admin_menu_page():
     st.title("🛠 システム管理者メニュー")
     st.info(f"入室中: {st.session_state.user_info.get('email')}")
 
-    # ★変更：学習ログ閲覧タブを追加
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 ダッシュボード", "👤 ユーザー管理", "⚙️ システム設定", "🗄️ 生徒学習ログ"])
+    # ★変更：タブ構成に「フィードバック」を追加し、「生徒学習ログ」を確実に配置
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 ダッシュボード", "👤 ユーザー管理", "⚙️ システム設定", "🗄️ 生徒学習ログ", "📩 フィードバック"])
 
     # --- タブ1: ダッシュボード (コスト・ログ) ---
     with tab1:
@@ -709,14 +708,13 @@ def render_admin_menu_page():
         if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen_tab"):
             st.info("※チャット画面のデバッグメニューと同じロジックがここに実装されます（今回は省略）")
             
-    # --- タブ4: 生徒学習ログ閲覧 (追加機能) ---
+    # --- タブ4: 生徒学習ログ閲覧 (前回機能の再配置・確認) ---
     with tab4:
         st.subheader("🗄️ 生徒学習アーカイブ閲覧")
         st.caption("生徒の過去の学習記録（アーカイブ）を確認できます。")
         
-        # 1. ユーザー選択
         try:
-            # ユーザー一覧取得 (人数が多い場合はページネーション検討が必要だが今回は全件取得)
+            # ユーザー一覧取得
             all_users_stream = db.collection("users").stream()
             user_options = {}
             for doc in all_users_stream:
@@ -734,7 +732,6 @@ def render_admin_menu_page():
                 
                 if target_uid:
                     st.markdown("---")
-                    # 2. アーカイブ選択
                     target_ref = db.collection("users").document(target_uid)
                     archives_stream = target_ref.collection("archived_sessions")\
                                             .order_by("archived_at", direction=firestore.Query.DESCENDING)\
@@ -760,7 +757,6 @@ def render_admin_menu_page():
                             st.success(f"表示中: {selected_archive}")
                             messages = archive_opts[selected_archive]
                             
-                            # 3. チャットログ表示
                             with st.container():
                                 for msg in messages:
                                     role = msg.get("role")
@@ -772,6 +768,36 @@ def render_admin_menu_page():
                                         st.markdown(content)
         except Exception as e:
             st.error(f"データ取得エラー: {e}")
+
+    # --- タブ5: フィードバック閲覧 (★新規追加) ---
+    with tab5:
+        st.subheader("📩 ご意見・不具合報告一覧")
+        st.caption("生徒から寄せられたフィードバック（新しい順）です。")
+        
+        try:
+            feedback_stream = db.collection("feedback")\
+                                .order_by("timestamp", direction=firestore.Query.DESCENDING)\
+                                .limit(50).stream()
+            
+            fb_data = []
+            for doc in feedback_stream:
+                f = doc.to_dict()
+                ts = f.get("timestamp")
+                date_str = ts.astimezone(JST).strftime('%Y/%m/%d %H:%M') if ts else "-"
+                
+                fb_data.append({
+                    "日時": date_str,
+                    "Email": f.get("email", "-"),
+                    "内容": f.get("content", "")
+                })
+            
+            if fb_data:
+                st.dataframe(pd.DataFrame(fb_data), use_container_width=True)
+            else:
+                st.info("まだフィードバックはありません。")
+                
+        except Exception as e:
+            st.error(f"フィードバック取得エラー: {e}")
 
     st.markdown("---")
     if st.button("← ポータルへ戻る"):
@@ -791,8 +817,6 @@ def render_portal_page():
     st.info(f"📚 **累計学習時間**: {total_hours}時間 {total_minutes % 60}分")
 
     # --- ★入退室（学習タイマー）ロジック ---
-    # 放置対策チェックのみ実施
-    
     if st.session_state.user_role != "global_admin":
         active_logs = user_ref.collection("attendance_logs")\
                             .where("status", "==", "active")\
@@ -809,12 +833,15 @@ def render_portal_page():
                 if diff.total_seconds() > 86400: # 24時間
                     st.warning("⚠️ 前回の退室記録が正しく行われていません。24時間以上経過したため、アラートを表示しています。")
         
-        # 通常生徒用の表示
         st.markdown("現在、**入室中（学習中）**として時間を計測しています。終了する際はサイドバーの「退室する」を押してください。")
     else:
-        # ★変更：管理者入室時の表示変更
         st.success("🛡️ **管理者モードで入室中**")
         st.caption("※管理者のため、学習時間の計測は行われません。")
+        
+        # ★追加：管理者メニューへのボタンをここに独立して配置（ボタン＋空白の配置）
+        st.markdown("---")
+        if st.button("🛠 管理者メニューを開く", type="primary"):
+            navigate_to("admin_menu")
     
     st.markdown("---")
 
@@ -829,97 +856,55 @@ def render_portal_page():
             navigate_to("board")
             
     with col2:
-        # ★分割：入退室履歴
         if st.button("📝 入退室履歴\n(履歴確認)", use_container_width=True):
             navigate_to("study_log")
-        # ★分割：過去の復習
         if st.button("🗄️ 過去の復習\n(アーカイブ)", use_container_width=True):
             navigate_to("archive")
         if st.button("👥 チーム\n(みんなで頑張る)", use_container_width=True):
             navigate_to("team")
         
-        # 管理者の場合のみ表示
-        if st.session_state.get("user_role") == "global_admin":
-            if st.button("🛠 管理者メニュー\n(設定・管理)", use_container_width=True, type="primary"):
-                navigate_to("admin_menu")
+        # ★修正：ここにあった管理者メニューボタンを削除（上で独立させたため）
     
     st.markdown("---")
     
-    # 設定・サポート
-    with st.expander("⚙️ 設定・サポート"):
-        st.markdown("### 👤 プロフィール設定")
-        
-        # 名前変更
-        new_name = st.text_input("表示名（AIが呼びかける名前）", value=student_name, key="setting_name")
-        if new_name != student_name:
-            if st.button("名前を更新"):
-                user_ref.update({"name": new_name})
-                st.session_state.user_name = new_name
-                st.success("名前を更新しました")
-                time.sleep(1)
-                st.rerun()
-        
-        # ランキング匿名設定
-        if "is_anon_ranking" not in st.session_state:
-            st.session_state.is_anon_ranking = user_doc.get("isAnonymousRanking", False)
-        
-        is_anon = st.checkbox("ランキングで匿名にする", value=st.session_state.is_anon_ranking, key="setting_anon")
-        if is_anon != st.session_state.is_anon_ranking:
-            user_ref.update({"isAnonymousRanking": is_anon})
-            st.session_state.is_anon_ranking = is_anon
-            st.success("匿名設定を更新しました")
+    # ★変更：管理者の場合は「設定・サポート」を表示しない
+    if st.session_state.get("user_role") != "global_admin":
+        with st.expander("⚙️ 設定・サポート"):
+            st.markdown("### 👤 プロフィール設定")
             
-        st.markdown("---")
-        st.markdown("### 📢 ご意見・不具合報告")
-        with st.form("feedback_form_portal", clear_on_submit=True):
-            feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の機能が欲しいです")
-            feedback_submit = st.form_submit_button("送信")
-            if feedback_submit and feedback_content:
-                db.collection("feedback").add({
-                    "user_id": user_id,
-                    "email": user_email,
-                    "content": feedback_content,
-                    "timestamp": firestore.SERVER_TIMESTAMP
-                })
-                st.success("送信しました。ありがとうございます！")
-        
-        # ★管理者のみ表示（一般ユーザーには隠す）
-        if st.session_state.get("user_role") == "global_admin":
-            st.markdown("---")
-            with st.expander("管理者用：新規アカウント作成"):
-                admin_reg_pass = st.text_input("管理者パスワード", type="password", key="admin_reg_pass_tab")
+            # 名前変更
+            new_name = st.text_input("表示名（AIが呼びかける名前）", value=student_name, key="setting_name")
+            if new_name != student_name:
+                if st.button("名前を更新"):
+                    user_ref.update({"name": new_name})
+                    st.session_state.user_name = new_name
+                    st.success("名前を更新しました")
+                    time.sleep(1)
+                    st.rerun()
+            
+            # ランキング匿名設定
+            if "is_anon_ranking" not in st.session_state:
+                st.session_state.is_anon_ranking = user_doc.get("isAnonymousRanking", False)
+            
+            is_anon = st.checkbox("ランキングで匿名にする", value=st.session_state.is_anon_ranking, key="setting_anon")
+            if is_anon != st.session_state.is_anon_ranking:
+                user_ref.update({"isAnonymousRanking": is_anon})
+                st.session_state.is_anon_ranking = is_anon
+                st.success("匿名設定を更新しました")
                 
-                if ADMIN_KEY and admin_reg_pass == ADMIN_KEY:
-                    st.info("🔓 管理者モード：新規モニターユーザーを作成します")
-                    with st.form("admin_signup_form"):
-                        new_name_input = st.text_input("生徒のお名前") 
-                        new_email = st.text_input("新規メールアドレス")
-                        new_password = st.text_input("新規パスワード")
-                        submit_new = st.form_submit_button("アカウントを作成する")
-                        
-                        if submit_new:
-                            if not new_name_input:
-                                st.error("お名前を入力してください")
-                            else:
-                                resp = sign_up_with_email(new_email, new_password)
-                                if "error" in resp:
-                                    st.error(f"作成失敗: {resp['error']['message']}")
-                                else:
-                                    new_uid = resp["localId"]
-                                    try:
-                                        db.collection("users").document(new_uid).set({
-                                            "name": new_name_input,
-                                            "email": new_email,
-                                            "created_at": firestore.SERVER_TIMESTAMP,
-                                            "totalStudyMinutes": 0,
-                                            "isAnonymousRanking": False,
-                                            "role": "student"
-                                        })
-                                        st.success(f"アカウント作成成功！\n名前: {new_name_input}\nEmail: {new_email}\nPass: {new_password}")
-                                    except Exception as e:
-                                        st.error(f"データベース登録エラー: {e}")
-                elif admin_reg_pass:
-                     st.error("パスワードが違います")
+            st.markdown("---")
+            st.markdown("### 📢 ご意見・不具合報告")
+            with st.form("feedback_form_portal", clear_on_submit=True):
+                feedback_content = st.text_area("感想、バグ、要望など", placeholder="例：〇〇の機能が欲しいです")
+                feedback_submit = st.form_submit_button("送信")
+                if feedback_submit and feedback_content:
+                    db.collection("feedback").add({
+                        "user_id": user_id,
+                        "email": user_email,
+                        "content": feedback_content,
+                        "timestamp": firestore.SERVER_TIMESTAMP
+                    })
+                    st.success("送信しました。ありがとうございます！")
 
 def render_study_log_page():
     """入退室履歴のみを表示するページ（アーカイブは分離）"""
