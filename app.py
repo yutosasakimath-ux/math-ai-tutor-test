@@ -105,6 +105,12 @@ def apply_portal_css():
         height: 120px;
         white-space: pre-wrap;
     }
+    /* 入退室ボタンを目立たせる */
+    .big-button {
+        font-size: 24px !important;
+        font-weight: bold !important;
+        height: 80px !important;
+    }
     </style>
     """
     st.markdown(portal_style, unsafe_allow_html=True)
@@ -407,18 +413,27 @@ with st.sidebar:
     st.markdown("---")
 
     # AIコーチ画面の場合のみ「会話履歴削除」を表示
+    # ★要件変更: スマートアーカイブ機能の実装
     if st.session_state.current_page == "chat":
         if st.button("🗑️ 会話履歴を全削除", key="sb_clear_history"):
-            with st.spinner("履歴を保存して削除中..."):
+            with st.spinner("会話内容を要約してアーカイブ保存しています..."):
                 try:
+                    # 1. 履歴を取得
                     history_stream = user_ref.collection("history").order_by("timestamp").stream()
                     session_logs = []
+                    full_text_for_summary = ""
+                    
                     batch = db.batch()
                     doc_count = 0
                     
                     for doc in history_stream:
                         data = doc.to_dict()
                         session_logs.append(data)
+                        content_str = data.get("content", "")
+                        role_str = data.get("role", "")
+                        full_text_for_summary += f"{role_str}: {content_str}\n"
+                        
+                        # 物理削除の準備
                         batch.delete(doc.reference)
                         doc_count += 1
                         
@@ -427,23 +442,46 @@ with st.sidebar:
                             batch = db.batch()
                             doc_count = 0
                     
+                    # 2. Geminiでタイトル生成（ログがある場合のみ）
+                    archive_title = datetime.datetime.now(JST).strftime('%Y/%m/%d の学習') # デフォルト
+                    if full_text_for_summary and GEMINI_API_KEY:
+                        try:
+                            genai.configure(api_key=GEMINI_API_KEY)
+                            model_flash = genai.GenerativeModel("gemini-1.5-flash")
+                            summary_prompt = f"""
+                            以下の学習ログを読んで、このセッションの内容を一言（20文字以内）で要約し、タイトルをつけてください。
+                            タイトルのみを出力してください。
+                            
+                            ログ:
+                            {full_text_for_summary[:5000]}
+                            """
+                            resp_summary = model_flash.generate_content(summary_prompt)
+                            if resp_summary and resp_summary.text:
+                                archive_title = resp_summary.text.strip()
+                        except Exception as e_gen:
+                            print(f"Summary generation failed: {e_gen}")
+                    
+                    # 3. アーカイブ保存
+                    if session_logs:
+                        user_ref.collection("archived_sessions").add({
+                            "title": archive_title,
+                            "archived_at": firestore.SERVER_TIMESTAMP,
+                            "messages": session_logs,
+                            "note": "ユーザーによる全削除時の自動アーカイブ"
+                        })
+                    
+                    # 4. 物理削除の実行（残りのバッチ）
                     if doc_count > 0:
                         batch.commit()
 
-                    if session_logs:
-                        user_ref.collection("archived_sessions").add({
-                            "archived_at": firestore.SERVER_TIMESTAMP,
-                            "messages": session_logs,
-                            "note": "ユーザーによる全削除時のバックアップ"
-                        })
                 except Exception as e:
-                    st.error(f"ログ保存エラー: {e}")
+                    st.error(f"アーカイブ保存エラー: {e}")
 
                 st.session_state.last_report = "" 
                 st.session_state.messages = [] 
                 st.session_state.messages_loaded = True 
                 st.session_state.debug_logs = [] 
-                st.success("履歴をリセットしました")
+                st.success("履歴をアーカイブしてリセットしました")
                 time.sleep(1)
                 st.rerun()
         st.markdown("---")
@@ -610,11 +648,91 @@ def render_portal_page():
     st.title(f"こんにちは、{student_name}さん！👋")
     
     # 簡易サマリ
-    user_doc = user_ref.get().to_dict()
+    user_doc_obj = user_ref.get()
+    user_doc = user_doc_obj.to_dict()
     total_minutes = user_doc.get("totalStudyMinutes", 0)
     total_hours = total_minutes // 60
     
     st.info(f"📚 **累計学習時間**: {total_hours}時間 {total_minutes % 60}分")
+
+    # --- ★入退室（学習タイマー）ロジック ---
+    st.markdown("### ⏱️ 学習タイマー")
+    
+    # 最新のactiveなログを取得
+    active_logs = user_ref.collection("attendance_logs")\
+                          .where("status", "==", "active")\
+                          .limit(1).stream()
+    current_active_log = next(active_logs, None)
+    
+    # 放置対策: 24時間以上経過しているかチェック
+    if current_active_log:
+        data = current_active_log.to_dict()
+        entry_ts = data.get("entry_timestamp")
+        if entry_ts:
+            entry_dt = entry_ts.astimezone(JST)
+            now_dt = datetime.datetime.now(JST)
+            diff = now_dt - entry_dt
+            if diff.total_seconds() > 86400: # 24時間
+                st.warning("⚠️ 前回の退室記録が正しく行われていません。24時間以上経過したため、アラートを表示しています。")
+                # 必要に応じてここで強制退室処理を入れることも可能
+
+    if current_active_log:
+        # 入室中（Active）の状態
+        log_id = current_active_log.id
+        entry_time = current_active_log.to_dict().get("entry_timestamp").astimezone(JST)
+        elapsed = datetime.datetime.now(JST) - entry_time
+        elapsed_min = int(elapsed.total_seconds() // 60)
+        
+        st.markdown(f"現在、学習中です！ (開始: {entry_time.strftime('%H:%M')})")
+        st.metric("経過時間", f"{elapsed_min} 分")
+        
+        if st.button("退室する（学習終了）", use_container_width=True, type="primary"):
+            # 退室処理
+            exit_time = datetime.datetime.now(JST)
+            # Duration再計算 (分単位)
+            final_duration = int((exit_time - entry_time).total_seconds() // 60)
+            if final_duration < 1: final_duration = 1 # 最低1分
+            
+            batch = db.batch()
+            log_ref = user_ref.collection("attendance_logs").document(log_id)
+            
+            batch.update(log_ref, {
+                "exit_timestamp": firestore.SERVER_TIMESTAMP,
+                "duration_minutes": final_duration,
+                "status": "completed"
+            })
+            
+            batch.update(user_ref, {
+                "totalStudyMinutes": firestore.Increment(final_duration)
+            })
+            
+            batch.commit()
+            
+            # Study Logにも記録として残す（一貫性のため）
+            user_ref.collection("study_logs").add({
+                "minutes": final_duration,
+                "date": exit_time.strftime('%Y-%m-%d'),
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "note": "自動計測による記録"
+            })
+
+            st.success(f"お疲れ様でした！ {final_duration}分 学習しました。")
+            time.sleep(1.5)
+            st.rerun()
+
+    else:
+        # 退室中（Inactive）の状態
+        st.write("勉強を始めるときはボタンを押してください。")
+        if st.button("入室する（学習開始）", use_container_width=True):
+            user_ref.collection("attendance_logs").add({
+                "entry_timestamp": firestore.SERVER_TIMESTAMP,
+                "status": "active"
+            })
+            st.success("学習を開始します！")
+            time.sleep(1)
+            st.rerun()
+
+    st.markdown("---")
 
     # メインナビゲーション
     col1, col2 = st.columns(2)
@@ -627,7 +745,8 @@ def render_portal_page():
             navigate_to("board")
             
     with col2:
-        if st.button("📝 学習記録\n(時間を記録)", use_container_width=True):
+        # ★手動記録ボタンを削除し、アーカイブ閲覧等への導線とするか、またはタイマーがメインなので残すとしても「履歴確認」的なニュアンス
+        if st.button("📝 過去の記録\n(履歴・復習)", use_container_width=True):
             navigate_to("study_log")
         if st.button("👥 チーム\n(みんなで頑張る)", use_container_width=True):
             navigate_to("team")
@@ -716,105 +835,113 @@ def render_portal_page():
                      st.error("パスワードが違います")
 
 def render_study_log_page():
-    """学習記録画面（修正・削除機能付き）"""
-    st.title("📝 学習記録")
-    st.write("今日の頑張りを記録しよう！")
+    """学習記録画面（修正・削除機能・アーカイブ閲覧）"""
+    st.title("📝 学習記録 & アーカイブ")
     
-    with st.form("study_log_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            hours = st.number_input("時間 (0-24)", min_value=0, max_value=24, value=0, step=1)
-        with col2:
-            minutes = st.number_input("分 (0-59)", min_value=0, max_value=59, value=0, step=1)
-            
-        note = st.text_area("メモ (学習内容や感想)", placeholder="例: 三角関数の加法定理を覚えた！")
-        submit = st.form_submit_button("記録する")
+    # ★手動入力フォームを削除し、アーカイブ閲覧機能を追加
+    
+    tab_history, tab_archive = st.tabs(["📜 学習履歴 (時間)", "🗄️ 過去の復習 (アーカイブ)"])
+    
+    with tab_history:
+        st.write("過去の学習時間履歴（自動計測含む）")
+        logs_stream = user_ref.collection("study_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(20).stream()
         
-        if submit:
-            if hours == 0 and minutes == 0:
-                st.error("学習時間を入力してください")
+        for log in logs_stream:
+            doc_id = log.id
+            data = log.to_dict()
+            ts = data.get("timestamp")
+            
+            if ts:
+                ts_jst = ts.astimezone(JST)
+                date_display = ts_jst.strftime('%Y/%m/%d %H:%M')
             else:
-                total_min = hours * 60 + minutes
-                now_jst = datetime.datetime.now(JST)
-                date_str = now_jst.strftime('%Y-%m-%d')
+                date_display = data.get("date")
                 
-                try:
-                    user_ref.collection("study_logs").add({
-                        "minutes": total_min,
-                        "date": date_str,
-                        "timestamp": firestore.SERVER_TIMESTAMP,
-                        "note": note
-                    })
-                    
-                    user_ref.update({
-                        "totalStudyMinutes": firestore.Increment(total_min)
-                    })
-                    
-                    st.success(f"{hours}時間{minutes}分の学習を記録しました！")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"記録エラー: {e}")
-
-    st.markdown("### 📜 直近の履歴（編集・削除）")
-    logs_stream = user_ref.collection("study_logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
-    
-    for log in logs_stream:
-        doc_id = log.id
-        data = log.to_dict()
-        ts = data.get("timestamp")
-        
-        if ts:
-            ts_jst = ts.astimezone(JST)
-            date_display = ts_jst.strftime('%Y/%m/%d %H:%M')
-        else:
-            date_display = data.get("date")
+            m_val = data.get("minutes", 0)
+            h = m_val // 60
+            m = m_val % 60
             
-        m_val = data.get("minutes", 0)
-        h = m_val // 60
-        m = m_val % 60
-        
-        with st.expander(f"{date_display} - {h}時間{m}分 : {data.get('note', '')[:10]}..."):
-            with st.form(f"edit_log_{doc_id}"):
-                st.caption("内容を修正")
-                new_h = st.number_input("時間", min_value=0, max_value=24, value=h, key=f"h_{doc_id}")
-                new_m = st.number_input("分", min_value=0, max_value=59, value=m, key=f"m_{doc_id}")
-                new_note = st.text_area("メモ", value=data.get('note', ''), key=f"n_{doc_id}")
-                
-                col_upd, col_del = st.columns(2)
-                with col_upd:
-                    if st.form_submit_button("更新する"):
-                        try:
-                            new_total_min = new_h * 60 + new_m
-                            diff = new_total_min - m_val
-                            
-                            user_ref.collection("study_logs").document(doc_id).update({
-                                "minutes": new_total_min,
-                                "note": new_note
-                            })
-                            user_ref.update({
-                                "totalStudyMinutes": firestore.Increment(diff)
-                            })
-                            
-                            st.success("更新しました！")
-                            time.sleep(1)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"更新エラー: {e}")
+            with st.expander(f"{date_display} - {h}時間{m}分 : {data.get('note', '')[:10]}..."):
+                with st.form(f"edit_log_{doc_id}"):
+                    st.caption("内容を修正")
+                    new_h = st.number_input("時間", min_value=0, max_value=24, value=h, key=f"h_{doc_id}")
+                    new_m = st.number_input("分", min_value=0, max_value=59, value=m, key=f"m_{doc_id}")
+                    new_note = st.text_area("メモ", value=data.get('note', ''), key=f"n_{doc_id}")
+                    
+                    col_upd, col_del = st.columns(2)
+                    with col_upd:
+                        if st.form_submit_button("更新する"):
+                            try:
+                                new_total_min = new_h * 60 + new_m
+                                diff = new_total_min - m_val
+                                
+                                user_ref.collection("study_logs").document(doc_id).update({
+                                    "minutes": new_total_min,
+                                    "note": new_note
+                                })
+                                user_ref.update({
+                                    "totalStudyMinutes": firestore.Increment(diff)
+                                })
+                                
+                                st.success("更新しました！")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"更新エラー: {e}")
 
-                with col_del:
-                    if st.form_submit_button("削除する", type="primary"):
-                        try:
-                            user_ref.collection("study_logs").document(doc_id).delete()
-                            user_ref.update({
-                                "totalStudyMinutes": firestore.Increment(-m_val)
-                            })
-                            
-                            st.success("削除しました")
-                            time.sleep(1)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"削除エラー: {e}")
+                    with col_del:
+                        if st.form_submit_button("削除する", type="primary"):
+                            try:
+                                user_ref.collection("study_logs").document(doc_id).delete()
+                                user_ref.update({
+                                    "totalStudyMinutes": firestore.Increment(-m_val)
+                                })
+                                
+                                st.success("削除しました")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"削除エラー: {e}")
+
+    with tab_archive:
+        st.write("AIコーチとの過去の会話（アーカイブ）を閲覧できます。")
+        
+        archives_stream = user_ref.collection("archived_sessions")\
+                                  .order_by("archived_at", direction=firestore.Query.DESCENDING)\
+                                  .limit(20).stream()
+        
+        # アーカイブ選択用UI
+        archives = list(archives_stream)
+        if not archives:
+            st.info("アーカイブされた会話はありません。")
+        else:
+            archive_options = {}
+            for doc in archives:
+                d = doc.to_dict()
+                ts = d.get("archived_at")
+                date_str = ts.astimezone(JST).strftime('%m/%d %H:%M') if ts else "日時不明"
+                title = d.get("title", "無題のセッション")
+                label = f"{date_str} : {title}"
+                archive_options[label] = d.get("messages", [])
+            
+            selected_label = st.selectbox("閲覧したい会話を選択", list(archive_options.keys()))
+            
+            if selected_label:
+                st.markdown("---")
+                st.caption(f"閲覧中: {selected_label}")
+                messages = archive_options[selected_label]
+                
+                # チャットログ再現
+                chat_container = st.container()
+                with chat_container:
+                    for msg in messages:
+                        role = msg.get("role")
+                        content = msg.get("content")
+                        if isinstance(content, dict):
+                             content = content.get("text", "")
+                        
+                        with st.chat_message(role):
+                            st.markdown(content)
 
 def render_ranking_page():
     """ランキング画面 (修正版: 個人/チーム × 日/週/月 の計6パターン + 1位始まり)"""
@@ -1223,6 +1350,7 @@ def render_chat_page():
                 else:
                     st.markdown(content)
 
+    # ★要件変更: システムプロンプトの高度化
     system_instruction = f"""
     あなたは世界一の「ソクラテス式数学コーチ」です。
     生徒の名前は「{student_name}」さんです。
@@ -1236,12 +1364,22 @@ def render_chat_page():
     【あなたの絶対的な使命】
     生徒が「自力で答えに辿り着く」ことを支援すること。
     答えを教えることは、生徒の学習機会を奪う「罪」だと認識してください。
-    【指導ガイドライン】
+    
+    【指導ガイドライン (v2.0)】
     1. **回答の禁止**: どんなに求められても、最終的な答えや数式を直接提示してはいけません。
     2. **現状分析**: まず、生徒が質問を見て、「どこまで分かっていて、どこで詰まっているか」を特定してください。
-    3. **問いかけ**: 生徒が次に進むための「小さなヒント」や「問いかけ」を投げかけてください。
-    4. **アウトプットの要求**: 一方的に解説せず、必ず生徒に考えさせ、返答させてください。
-    5. **数式**: 必要であればLaTeX形式（$マーク）を使ってきれいに表示してください。
+    3. **シングル・クエスチョン**: 生徒への問いかけは、1回の返答につき「原則1つ」に絞ってください。複数の質問を畳み掛けないこと。
+    4. **要点明確化**: 解説を行う際は、【ポイント】というセクションを作り、重要な概念を簡潔にまとめてください。
+    5. **アウトプットの要求**: 一方的に解説せず、必ず生徒に考えさせ、返答させてください。
+    6. **数式**: 必要であればLaTeX形式（$マーク）を使ってきれいに表示してください。
+    
+    【解決後のフロー制御】
+    問題が解決した、あるいは一区切りついたと判断した場合は、以下の選択肢を提示してください：
+    A: 今日はこれで終わる
+    B: 類題を解く
+    C: レベルを上げる
+    
+    ※もし生徒が「A: 今日はこれで終わる」を選んだ場合は、「サイドバーの『会話履歴を全削除』ボタンを押して、今日の学習記録をアーカイブ（保存）してください」と誘導してください。
     """
 
     with st.form(key="chat_form", clear_on_submit=True):
@@ -1304,10 +1442,8 @@ def render_chat_page():
                             history_for_ai.append({"role": m["role"], "parts": [content_str]})
 
                         PRIORITY_MODELS = [
-                            "gemini-3-flash-preview",
                             "gemini-2.0-flash-exp",
                             "gemini-1.5-flash",
-                            "gemini-3-pro-preview",
                             "gemini-1.5-pro",
                         ]
                         
