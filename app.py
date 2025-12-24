@@ -421,12 +421,9 @@ with st.sidebar:
     if st.button("💬 掲示板", use_container_width=True, key="sb_board"):
             navigate_to("board")
 
-    # ★管理者のみ表示する専用メニューボタン
-    if user_role == "global_admin":
-        st.markdown("---")
-        st.caption("管理者機能")
-        if st.button("🛠 管理者メニュー", use_container_width=True, type="primary", key="sb_admin_menu"):
-            navigate_to("admin_menu")
+    # ★管理者専用メニューボタンはサイドバーから削除（ポータルへ移行）
+    # if user_role == "global_admin":
+    #    ...
     
     st.markdown("---")
 
@@ -571,9 +568,9 @@ with st.sidebar:
 # 各画面の描画関数定義
 # =========================================================
 
-# ★管理者専用メニュー画面
-def render_admin_menu_page():
-    """管理者専用の機能集約画面"""
+# ★変更：管理者用メニュー画面を廃止し、個別の機能ページを描画する関数に変更
+def render_admin_tools_page():
+    """管理者専用の機能ページ（ルーティングに応じて中身を変える）"""
     # セキュリティチェック: 管理者権限がない場合はポータルへ強制送還
     if st.session_state.get("user_role") != "global_admin":
         st.error("権限がありません。")
@@ -581,15 +578,14 @@ def render_admin_menu_page():
         navigate_to("portal")
         return
 
-    st.title("🛠 システム管理者メニュー")
+    current = st.session_state.current_page
+    
+    st.title("🛠 管理者ツール")
     st.info(f"入室中: {st.session_state.user_info.get('email')}")
 
-    # ★変更：タブ構成に「フィードバック」を追加し、「生徒学習ログ」を確実に配置
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 ダッシュボード", "👤 ユーザー管理", "⚙️ システム設定", "🗄️ 生徒学習ログ", "📩 フィードバック"])
-
-    # --- タブ1: ダッシュボード (コスト・ログ) ---
-    with tab1:
-        st.subheader("💰 コスト分析 & ログ")
+    # --- 機能1: ダッシュボード (コスト・ログ) ---
+    if current == "admin_dashboard":
+        st.subheader("📊 ダッシュボード (コスト分析 & ログ)")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -598,7 +594,7 @@ def render_admin_menu_page():
         
         with col2:
             st.markdown("#### コスト試算")
-            if st.button("📊 直近1000件から試算", key="admin_cost_calc_tab"):
+            if st.button("📊 直近1000件から試算", key="admin_cost_calc"):
                 with st.spinner("集計中..."):
                     try:
                         INPUT_PRICE_PER_M = 0.50 
@@ -642,18 +638,18 @@ def render_admin_menu_page():
             with st.expander("ログを表示", expanded=True):
                 for i, log in enumerate(reversed(st.session_state.debug_logs)):
                     st.code(log, language="text")
-                if st.button("ログ消去", key="admin_clear_log_tab"):
+                if st.button("ログ消去", key="admin_clear_log"):
                     st.session_state.debug_logs = []
                     st.rerun()
         else:
             st.caption("現在エラーログはありません")
 
-    # --- タブ2: ユーザー管理 (新規作成) ---
-    with tab2:
+    # --- 機能2: ユーザー管理 (新規作成) ---
+    elif current == "admin_users":
         st.subheader("👤 新規アカウント作成")
         st.caption("管理者として新規ユーザーを作成します。作成後、生徒にメールアドレスとパスワードを伝えてください。")
         
-        with st.form("admin_signup_form_tab"):
+        with st.form("admin_signup_form"):
             col_u1, col_u2 = st.columns(2)
             with col_u1:
                 new_name_input = st.text_input("生徒のお名前")
@@ -685,11 +681,11 @@ def render_admin_menu_page():
                         except Exception as e:
                             st.error(f"データベース登録エラー: {e}")
 
-    # --- タブ3: システム設定 (モデル一覧など) ---
-    with tab3:
+    # --- 機能3: システム設定 (モデル一覧など) ---
+    elif current == "admin_settings":
         st.subheader("⚙️ システム設定 & ツール")
         
-        if st.button("📡 利用可能なGeminiモデル一覧を取得", key="admin_model_list_tab"):
+        if st.button("📡 利用可能なGeminiモデル一覧を取得", key="admin_model_list"):
             if not GEMINI_API_KEY:
                 st.error("APIキーが設定されていません")
             else:
@@ -705,11 +701,11 @@ def render_admin_menu_page():
                     st.error(f"取得エラー: {e}")
         
         st.markdown("#### 📝 学習まとめレポート作成 (デバッグ用)")
-        if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen_tab"):
+        if st.button("📝 レポートを作成してPDFを開く", key="admin_report_gen"):
             st.info("※チャット画面のデバッグメニューと同じロジックがここに実装されます（今回は省略）")
             
-    # --- タブ4: 生徒学習ログ閲覧 (前回機能の再配置・確認) ---
-    with tab4:
+    # --- 機能4: 生徒学習ログ閲覧 ---
+    elif current == "admin_student_logs":
         st.subheader("🗄️ 生徒学習アーカイブ閲覧")
         st.caption("生徒の過去の学習記録（アーカイブ）を確認できます。")
         
@@ -769,8 +765,8 @@ def render_admin_menu_page():
         except Exception as e:
             st.error(f"データ取得エラー: {e}")
 
-    # --- タブ5: フィードバック閲覧 (★新規追加) ---
-    with tab5:
+    # --- 機能5: フィードバック閲覧 ---
+    elif current == "admin_feedback":
         st.subheader("📩 ご意見・不具合報告一覧")
         st.caption("生徒から寄せられたフィードバック（新しい順）です。")
         
@@ -838,11 +834,6 @@ def render_portal_page():
         st.success("🛡️ **管理者モードで入室中**")
         st.caption("※管理者のため、学習時間の計測は行われません。")
         
-        # ★追加：管理者メニューへのボタンをここに独立して配置（ボタン＋空白の配置）
-        st.markdown("---")
-        if st.button("🛠 管理者メニューを開く", type="primary"):
-            navigate_to("admin_menu")
-    
     st.markdown("---")
 
     # メインナビゲーション
@@ -862,8 +853,24 @@ def render_portal_page():
             navigate_to("archive")
         if st.button("👥 チーム\n(みんなで頑張る)", use_container_width=True):
             navigate_to("team")
-        
-        # ★修正：ここにあった管理者メニューボタンを削除（上で独立させたため）
+    
+    # ★変更：管理者のみ表示する専用機能ボタン（ポータルに展開）
+    if st.session_state.get("user_role") == "global_admin":
+        st.markdown("---")
+        st.subheader("🛠 管理者機能")
+        col_adm1, col_adm2 = st.columns(2)
+        with col_adm1:
+            if st.button("📊 ダッシュボード\n(コスト分析)", use_container_width=True):
+                navigate_to("admin_dashboard")
+            if st.button("👤 ユーザー管理\n(新規作成)", use_container_width=True):
+                navigate_to("admin_users")
+            if st.button("⚙️ システム設定\n(モデル確認)", use_container_width=True):
+                navigate_to("admin_settings")
+        with col_adm2:
+            if st.button("🗄️ 生徒学習ログ\n(アーカイブ閲覧)", use_container_width=True):
+                navigate_to("admin_student_logs")
+            if st.button("📩 フィードバック\n(ご意見一覧)", use_container_width=True):
+                navigate_to("admin_feedback")
     
     st.markdown("---")
     
@@ -1563,13 +1570,16 @@ def render_chat_page():
 
 current_page = st.session_state.current_page
 
+# ★変更：管理者用ページのルーティング分岐を追加
+ADMIN_PAGES = ["admin_dashboard", "admin_users", "admin_settings", "admin_student_logs", "admin_feedback"]
+
 if current_page == "portal":
     render_portal_page()
 elif current_page == "chat":
     render_chat_page()
 elif current_page == "study_log":
     render_study_log_page()
-elif current_page == "archive": # ★新規ルーティング
+elif current_page == "archive": 
     render_archive_page()
 elif current_page == "ranking":
     render_ranking_page()
@@ -1577,7 +1587,7 @@ elif current_page == "board":
     render_board_page()
 elif current_page == "team":
     render_team_page()
-elif current_page == "admin_menu":
-    render_admin_menu_page()
+elif current_page in ADMIN_PAGES: # ★変更：管理者用ツールの表示
+    render_admin_tools_page()
 else:
     render_portal_page()
